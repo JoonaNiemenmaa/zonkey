@@ -1,5 +1,8 @@
 const std = @import("std");
-const utils = @import("root.zig").utils;
+
+const Allocator = std.mem.Allocator;
+const ArrayList = std.ArrayList;
+const StringHashMap = std.StringHashMap;
 
 pub const TokenType = enum { 
     LPAREN, 
@@ -32,16 +35,34 @@ pub const TokenType = enum {
     ILLEGAL 
 };
 
+pub const Literal = union(enum) {
+    char: u8,
+    string: []const u8,
+};
+
 pub const Token = struct {
     type: TokenType,
-    literal: []const u8,
+    literal: Literal,
     line: usize,
     column: usize,
 };
 
+const IDENT_MAX_SIZE = 255;
+
 const ScannerError = error{EOFError};
 
+pub fn printToken(token: Token) void {
+    std.debug.print("Token {{ type = {}, ", .{ token.type });
+    switch (token.literal) {
+        .char => |c| std.debug.print("char = '{c}', ", .{ c }), 
+        .string => |s| std.debug.print("string = \"{s}\", ", .{ s }), 
+    }
+    std.debug.print("line = {}, column = {} }}\n", .{ token.line, token.column });
+}
+
 pub const Scanner = struct {
+
+    allocator: Allocator,
     sourceCode: []const u8,
 
     current: usize,
@@ -49,6 +70,8 @@ pub const Scanner = struct {
 
     line: usize,
     column: usize,
+
+    keywords: StringHashMap(TokenType),
 
     fn getCurrentChar(self: *@This()) ScannerError!u8 {
         return if (self.current < self.sourceCode.len) self.sourceCode[self.current] else ScannerError.EOFError;
@@ -72,13 +95,24 @@ pub const Scanner = struct {
         }
     }
 
-    pub fn init(source_code: []const u8) @This() {
+    pub fn init(allocator: Allocator, source_code: []const u8) !@This() {
+
+        var keywords: StringHashMap(TokenType) = .init(allocator);
+
+        try keywords.put("let", TokenType.LET);
+        try keywords.put("return", TokenType.RETURN);
+        try keywords.put("true", TokenType.TRUE);
+        try keywords.put("false", TokenType.FALSE);
+        try keywords.put("fn", TokenType.FN);
+
         return Scanner{
+            .allocator = allocator,
             .sourceCode = source_code,
             .current = 0,
             .ahead = 1,
             .line = 1,
             .column = 1,
+            .keywords = keywords
         };
     }
 
@@ -86,59 +120,94 @@ pub const Scanner = struct {
         while (std.ascii.isWhitespace(try self.getCurrentChar())) try self.nextChar();
     }
 
-    fn createToken(self: *@This(), @"type": TokenType, literal: []const u8) Token {
+    fn readIdent(self: *@This(), buffer: []u8) usize {
+        if (buffer.len == 0) return 0;
+
+        var i: usize = 0;
+        var current: u8 = self.getCurrentChar() catch 0;
+
+        while (std.ascii.isAlphanumeric(current) and i < buffer.len) : (i += 1) {
+            buffer[i] = current;
+            self.nextChar() catch return i + 1;
+            current = self.getCurrentChar() catch 0;
+        }
+
+        return i;
+    }
+
+    fn createToken(self: *@This(), @"type": TokenType, literal: Literal) Token {
         return Token{ .type = @"type", .literal = literal, .line = self.line, .column = self.column };
     }
 
-    pub fn nextToken(self: *@This()) Token {
+    pub fn nextToken(self: *@This()) !Token {
         self.eatWhitespace() catch {
-            return self.createToken(TokenType.EOF, "");
+            return self.createToken(TokenType.EOF, Literal{ .char = 0 });
         };
 
         var token: Token = undefined;
 
         const current = self.getCurrentChar() catch {
-            return self.createToken(TokenType.EOF, "");
+            return self.createToken(TokenType.EOF, Literal{ .char = 0 });
         };
 
         const ahead = self.getAheadChar() catch 0;
 
         token_switch: switch (current) {
-            ';' => token = self.createToken(TokenType.SEMICOLON, ";"),
-            '{' => token = self.createToken(TokenType.LBRACE, "{"),
-            '}' => token = self.createToken(TokenType.RBRACE, "}"),
-            '(' => token = self.createToken(TokenType.LPAREN, "("),
-            ')' => token = self.createToken(TokenType.RPAREN, ")"),
-            '[' => token = self.createToken(TokenType.LBRACKET, "["),
-            ']' => token = self.createToken(TokenType.RBRACKET, "]"),
-            '+' => token = self.createToken(TokenType.PLUS, "+"),
-            '-' => token = self.createToken(TokenType.MINUS, "-"),
-            '*' => token = self.createToken(TokenType.ASTERISK, "*"),
-            '/' => token = self.createToken(TokenType.SLASH, "/"),
-            ',' => token = self.createToken(TokenType.COMMA, ","),
-            '!' => token = {
+            ';' => token = self.createToken(TokenType.SEMICOLON, Literal{ .char = current }),
+            '{' => token = self.createToken(TokenType.LBRACE, Literal{ .char = current }),
+            '}' => token = self.createToken(TokenType.RBRACE, Literal{ .char = current }),
+            '(' => token = self.createToken(TokenType.LPAREN, Literal{ .char = current }),
+            ')' => token = self.createToken(TokenType.RPAREN, Literal{ .char = current }),
+            '[' => token = self.createToken(TokenType.LBRACKET, Literal{ .char = current }),
+            ']' => token = self.createToken(TokenType.RBRACKET, Literal{ .char = current }),
+            '+' => token = self.createToken(TokenType.PLUS, Literal{ .char = current }),
+            '-' => token = self.createToken(TokenType.MINUS, Literal{ .char = current }),
+            '*' => token = self.createToken(TokenType.ASTERISK, Literal{ .char = current }),
+            '/' => token = self.createToken(TokenType.SLASH, Literal{ .char = current }),
+            ',' => token = self.createToken(TokenType.COMMA, Literal{ .char = current }),
+            '!' => {
                 if (ahead == '=') {
-                    token = self.createToken(TokenType.NOT_EQUALS, "=");
+                    token = self.createToken(TokenType.NOT_EQUALS, Literal{ .string = "!=" });
+                    self.nextChar() catch {};
                     break :token_switch;
                 }
-                self.createToken(TokenType.BANG, "!");
+                token = self.createToken(TokenType.BANG, Literal{ .char = current });
             },
             '=' => {
                 if (ahead == '=') {
-                    token = self.createToken(TokenType.EQUALS, "=");
+                    token = self.createToken(TokenType.EQUALS, Literal{ .string = "==" });
+                    self.nextChar() catch {};
                     break :token_switch;
                 }
-                token = self.createToken(TokenType.ASSIGN, "=");
+                token = self.createToken(TokenType.ASSIGN, Literal{ .char = current });
             },
             else => {
-                token = self.createToken(TokenType.ILLEGAL, &[_]u8{current});
+                const line: usize = self.line;
+                const column: usize = self.column;
+
                 if (std.ascii.isAlphabetic(current)) {
-                    // tokenize a string
+                    var ident: [IDENT_MAX_SIZE]u8 = undefined;
+                    const bytes_read = self.readIdent(&ident);
+
+                    if (self.keywords.get(ident[0..bytes_read])) |@"type"| {
+                        return Token{ 
+                            .type = @"type",
+                            .literal = Literal { .string = self.keywords.getKey(ident[0..bytes_read]).? }, 
+                            .line = line, 
+                            .column = column 
+                        };
+                    } else {
+                        const literal = try self.allocator.alloc(u8, bytes_read);
+
+                        std.mem.copyForwards(u8, literal, ident[0..bytes_read]);
+
+                        return Token{ .type = TokenType.IDENT, .literal = Literal { .string = literal }, .line = line, .column = column };
+                    }
+                    
                 } else if (std.ascii.isDigit(current)) {
                     // tokenize a number
-                } else {
-                    //token = create_token(TokenType.ILLEGAL, &[_]u8{current});
                 }
+                token = self.createToken(TokenType.ILLEGAL, Literal{ .char = current });
             },
         }
 
@@ -148,7 +217,14 @@ pub const Scanner = struct {
     }
 };
 
-test "scanner test 1" {
+fn assertTokensEqual(token: Token, case: Token) !void {
+    try std.testing.expect(token.type == case.type);
+    try std.testing.expect(std.mem.eql(u8, token.literal, case.literal));
+    try std.testing.expect(token.line == case.line);
+    try std.testing.expect(token.column == case.column);
+}
+
+test "one character tokens" {
     const cases = [_]Token{ Token{
         .type = TokenType.LBRACKET,
         .literal = "[",
@@ -197,19 +273,54 @@ test "scanner test 1" {
     } };
 
     var scanner = Scanner.init(
+        std.testing.allocator,
         \\ [ ]{ }  (  )  
         \\ ;;
     );
 
     for (cases) |case| {
         const token = scanner.nextToken();
-
-        try std.testing.expect(token.type == case.type);
-        try std.testing.expect(std.mem.eql(u8, token.literal, case.literal));
-        try std.testing.expect(token.line == case.line);
-        try std.testing.expect(token.column == case.column);
+        try assertTokensEqual(token, case);
     }
 
     const token = scanner.nextToken();
     try std.testing.expect(token.type == TokenType.EOF);
+}
+
+test "two character tokens" {
+    const cases = [_]Token{
+        Token{
+            .type = TokenType.EQUALS,
+            .literal = "==",
+            .line = 1,
+            .column = 1,
+        },
+        Token{
+            .type = TokenType.NOT_EQUALS,
+            .literal = "!=",
+            .line = 2,
+            .column = 3,
+        },
+        Token{
+            .type = TokenType.EOF,
+            .literal = "",
+            .line = 2,
+            .column = 5,
+        }
+    };
+
+    var scanner = Scanner.init(
+        std.testing.allocator,
+        \\==
+        \\  !=
+    );
+
+    for (cases) |case| {
+        const token = scanner.nextToken();
+        try assertTokensEqual(token, case);
+    }
+
+    const token = scanner.nextToken();
+    try std.testing.expect(token.type == TokenType.EOF);
+
 }
