@@ -13,12 +13,23 @@ pub fn main() !void {
     var scanner: Scanner = try .init(
         allocator,
         \\ [ ]{ }  (  )  
-        \\ ;;ankka let treu true false
+        \\ ;201;ankka let treu true false
     );
 
     var token = try scanner.nextToken();
     while (token.type != TokenType.EOF) {
         monkey.scanner.printToken(token);
+
+        switch (token.literal) {
+            .char => {},
+            .string => |s|
+                switch (token.type) {
+                    TokenType.IDENT => allocator.free(s), 
+                    TokenType.INT => allocator.free(s), 
+                    else => {} 
+                }
+        }
+
         token = try scanner.nextToken();
     }
 }

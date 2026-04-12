@@ -120,19 +120,30 @@ pub const Scanner = struct {
         while (std.ascii.isWhitespace(try self.getCurrentChar())) try self.nextChar();
     }
 
-    fn readIdent(self: *@This(), buffer: []u8) usize {
-        if (buffer.len == 0) return 0;
+    fn readIdent(self: *@This()) ![]const u8 {
+        var buffer: ArrayList(u8) = .empty;
 
-        var i: usize = 0;
-        var current: u8 = self.getCurrentChar() catch 0;
-
-        while (std.ascii.isAlphanumeric(current) and i < buffer.len) : (i += 1) {
-            buffer[i] = current;
-            self.nextChar() catch return i + 1;
-            current = self.getCurrentChar() catch 0;
+        var current = self.getCurrentChar() catch unreachable;
+        while (std.ascii.isAlphanumeric(current)) {
+            try buffer.append(self.allocator, current);
+            self.nextChar() catch return buffer.toOwnedSlice(self.allocator);
+            current = self.getCurrentChar() catch return buffer.toOwnedSlice(self.allocator);
         }
 
-        return i;
+        return buffer.toOwnedSlice(self.allocator);
+    }
+
+    fn readNumber(self: *@This()) ![]const u8 {
+        var buffer: ArrayList(u8) = .empty;
+
+        var current = self.getCurrentChar() catch unreachable;
+        while (std.ascii.isDigit(current)) {
+            try buffer.append(self.allocator, current);
+            self.nextChar() catch return buffer.toOwnedSlice(self.allocator);
+            current = self.getCurrentChar() catch return buffer.toOwnedSlice(self.allocator);
+        }
+
+        return buffer.toOwnedSlice(self.allocator);
     }
 
     fn createToken(self: *@This(), @"type": TokenType, literal: Literal) Token {
@@ -186,26 +197,23 @@ pub const Scanner = struct {
                 const column: usize = self.column;
 
                 if (std.ascii.isAlphabetic(current)) {
-                    var ident: [IDENT_MAX_SIZE]u8 = undefined;
-                    const bytes_read = self.readIdent(&ident);
+                    const literal = try self.readIdent(); 
 
-                    if (self.keywords.get(ident[0..bytes_read])) |@"type"| {
+                    if (self.keywords.get(literal)) |@"type"| {
+                        defer self.allocator.free(literal);
                         return Token{ 
                             .type = @"type",
-                            .literal = Literal { .string = self.keywords.getKey(ident[0..bytes_read]).? }, 
+                            .literal = Literal { .string = self.keywords.getKey(literal).? }, 
                             .line = line, 
                             .column = column 
                         };
                     } else {
-                        const literal = try self.allocator.alloc(u8, bytes_read);
-
-                        std.mem.copyForwards(u8, literal, ident[0..bytes_read]);
-
                         return Token{ .type = TokenType.IDENT, .literal = Literal { .string = literal }, .line = line, .column = column };
                     }
                     
                 } else if (std.ascii.isDigit(current)) {
-                    // tokenize a number
+                    const number = try self.readNumber();
+                    return Token{ .type = TokenType.INT, .literal = Literal { .string = number }, .line = line, .column = column };
                 }
                 token = self.createToken(TokenType.ILLEGAL, Literal{ .char = current });
             },
