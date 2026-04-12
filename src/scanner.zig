@@ -3,37 +3,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const StringHashMap = std.StringHashMap;
+const Reader = std.io.Reader;
 
-pub const TokenType = enum { 
-    LPAREN, 
-    RPAREN, 
-    LBRACE, 
-    RBRACE, 
-    LBRACKET, 
-    RBRACKET, 
-    SEMICOLON, 
-    PLUS, 
-    MINUS, 
-    ASTERISK, 
-    SLASH, 
-    EQUALS, 
-    NOT_EQUALS, 
-    ASSIGN, 
-    BANG, 
-    COMMA, 
-
-    TRUE,
-    FALSE,
-    LET, 
-    RETURN, 
-    FN, 
-
-    IDENT, 
-    INT, 
-
-    EOF, 
-    ILLEGAL 
-};
+pub const TokenType = enum { LPAREN, RPAREN, LBRACE, RBRACE, LBRACKET, RBRACKET, SEMICOLON, PLUS, MINUS, ASTERISK, SLASH, EQUALS, NOT_EQUALS, ASSIGN, BANG, COMMA, TRUE, FALSE, LET, RETURN, FN, IDENT, INT, EOF, ILLEGAL };
 
 pub const Literal = union(enum) {
     char: u8,
@@ -47,56 +19,42 @@ pub const Token = struct {
     column: usize,
 };
 
-const IDENT_MAX_SIZE = 255;
-
 const ScannerError = error{EOFError};
 
 pub fn printToken(token: Token) void {
-    std.debug.print("Token {{ type = {}, ", .{ token.type });
+    std.debug.print("Token {{ type = {}, ", .{token.type});
     switch (token.literal) {
-        .char => |c| std.debug.print("char = '{c}', ", .{ c }), 
-        .string => |s| std.debug.print("string = \"{s}\", ", .{ s }), 
+        .char => |c| std.debug.print("char = '{c}', ", .{c}),
+        .string => |s| std.debug.print("string = \"{s}\", ", .{s}),
     }
     std.debug.print("line = {}, column = {} }}\n", .{ token.line, token.column });
 }
 
 pub const Scanner = struct {
-
     allocator: Allocator,
-    sourceCode: []const u8,
+    reader: Reader,
 
-    current: usize,
-    ahead: usize,
+    current: u8,
+    ahead: u8,
 
     line: usize,
     column: usize,
 
     keywords: StringHashMap(TokenType),
 
-    fn getCurrentChar(self: *@This()) ScannerError!u8 {
-        return if (self.current < self.sourceCode.len) self.sourceCode[self.current] else ScannerError.EOFError;
-    }
+    fn nextChar(self: *@This()) void {
+        self.current = self.ahead;
+        self.ahead = self.reader.takeByte() catch 0;
 
-    fn getAheadChar(self: *@This()) ScannerError!u8 {
-        return if (self.ahead < self.sourceCode.len) self.sourceCode[self.ahead] else ScannerError.EOFError;
-    }
+        self.column += 1;
 
-    fn nextChar(self: *@This()) ScannerError!void {
-        if (self.current < self.sourceCode.len) {
-            self.current += 1;
-            self.ahead = self.current + 1;
-
+        if (self.current == '\n') {
             self.column += 1;
-
-            if (try self.getCurrentChar() == '\n') {
-                self.column = 0;
-                self.line += 1;
-            }
+            self.line += 1;
         }
     }
 
-    pub fn init(allocator: Allocator, source_code: []const u8) !@This() {
-
+    pub fn init(allocator: Allocator, reader: Reader) !@This() {
         var keywords: StringHashMap(TokenType) = .init(allocator);
 
         try keywords.put("let", TokenType.LET);
@@ -105,29 +63,24 @@ pub const Scanner = struct {
         try keywords.put("false", TokenType.FALSE);
         try keywords.put("fn", TokenType.FN);
 
-        return Scanner{
-            .allocator = allocator,
-            .sourceCode = source_code,
-            .current = 0,
-            .ahead = 1,
-            .line = 1,
-            .column = 1,
-            .keywords = keywords
-        };
+        var scanner = Scanner{ .allocator = allocator, .reader = reader, .current = 0, .ahead = 0, .line = 1, .column = 1, .keywords = keywords };
+
+        scanner.current = scanner.reader.takeByte() catch 0;
+        scanner.ahead = scanner.reader.takeByte() catch 0;
+
+        return scanner;
     }
 
-    fn eatWhitespace(self: *@This()) ScannerError!void {
-        while (std.ascii.isWhitespace(try self.getCurrentChar())) try self.nextChar();
+    fn eatWhitespace(self: *@This()) void {
+        while (std.ascii.isWhitespace(self.current)) self.nextChar();
     }
 
     fn readIdent(self: *@This()) ![]const u8 {
         var buffer: ArrayList(u8) = .empty;
 
-        var current = self.getCurrentChar() catch unreachable;
-        while (std.ascii.isAlphanumeric(current)) {
-            try buffer.append(self.allocator, current);
-            self.nextChar() catch return buffer.toOwnedSlice(self.allocator);
-            current = self.getCurrentChar() catch return buffer.toOwnedSlice(self.allocator);
+        while (std.ascii.isAlphanumeric(self.current)) {
+            try buffer.append(self.allocator, self.current);
+            self.nextChar();
         }
 
         return buffer.toOwnedSlice(self.allocator);
@@ -136,11 +89,9 @@ pub const Scanner = struct {
     fn readNumber(self: *@This()) ![]const u8 {
         var buffer: ArrayList(u8) = .empty;
 
-        var current = self.getCurrentChar() catch unreachable;
-        while (std.ascii.isDigit(current)) {
-            try buffer.append(self.allocator, current);
-            self.nextChar() catch return buffer.toOwnedSlice(self.allocator);
-            current = self.getCurrentChar() catch return buffer.toOwnedSlice(self.allocator);
+        while (std.ascii.isDigit(self.current)) {
+            try buffer.append(self.allocator, self.current);
+            self.nextChar();
         }
 
         return buffer.toOwnedSlice(self.allocator);
@@ -151,75 +102,62 @@ pub const Scanner = struct {
     }
 
     pub fn nextToken(self: *@This()) !Token {
-        self.eatWhitespace() catch {
-            return self.createToken(TokenType.EOF, Literal{ .char = 0 });
-        };
+        self.eatWhitespace();
 
         var token: Token = undefined;
 
-        const current = self.getCurrentChar() catch {
-            return self.createToken(TokenType.EOF, Literal{ .char = 0 });
-        };
-
-        const ahead = self.getAheadChar() catch 0;
-
-        token_switch: switch (current) {
-            ';' => token = self.createToken(TokenType.SEMICOLON, Literal{ .char = current }),
-            '{' => token = self.createToken(TokenType.LBRACE, Literal{ .char = current }),
-            '}' => token = self.createToken(TokenType.RBRACE, Literal{ .char = current }),
-            '(' => token = self.createToken(TokenType.LPAREN, Literal{ .char = current }),
-            ')' => token = self.createToken(TokenType.RPAREN, Literal{ .char = current }),
-            '[' => token = self.createToken(TokenType.LBRACKET, Literal{ .char = current }),
-            ']' => token = self.createToken(TokenType.RBRACKET, Literal{ .char = current }),
-            '+' => token = self.createToken(TokenType.PLUS, Literal{ .char = current }),
-            '-' => token = self.createToken(TokenType.MINUS, Literal{ .char = current }),
-            '*' => token = self.createToken(TokenType.ASTERISK, Literal{ .char = current }),
-            '/' => token = self.createToken(TokenType.SLASH, Literal{ .char = current }),
-            ',' => token = self.createToken(TokenType.COMMA, Literal{ .char = current }),
+        switch (self.current) {
+            ';' => token = self.createToken(TokenType.SEMICOLON, Literal{ .char = self.current }),
+            '{' => token = self.createToken(TokenType.LBRACE, Literal{ .char = self.current }),
+            '}' => token = self.createToken(TokenType.RBRACE, Literal{ .char = self.current }),
+            '(' => token = self.createToken(TokenType.LPAREN, Literal{ .char = self.current }),
+            ')' => token = self.createToken(TokenType.RPAREN, Literal{ .char = self.current }),
+            '[' => token = self.createToken(TokenType.LBRACKET, Literal{ .char = self.current }),
+            ']' => token = self.createToken(TokenType.RBRACKET, Literal{ .char = self.current }),
+            '+' => token = self.createToken(TokenType.PLUS, Literal{ .char = self.current }),
+            '-' => token = self.createToken(TokenType.MINUS, Literal{ .char = self.current }),
+            '*' => token = self.createToken(TokenType.ASTERISK, Literal{ .char = self.current }),
+            '/' => token = self.createToken(TokenType.SLASH, Literal{ .char = self.current }),
+            ',' => token = self.createToken(TokenType.COMMA, Literal{ .char = self.current }),
             '!' => {
-                if (ahead == '=') {
+                if (self.ahead == '=') {
                     token = self.createToken(TokenType.NOT_EQUALS, Literal{ .string = "!=" });
-                    self.nextChar() catch {};
-                    break :token_switch;
+                    self.nextChar();
+                } else {
+                    token = self.createToken(TokenType.BANG, Literal{ .char = self.current });
                 }
-                token = self.createToken(TokenType.BANG, Literal{ .char = current });
             },
             '=' => {
-                if (ahead == '=') {
+                if (self.ahead == '=') {
                     token = self.createToken(TokenType.EQUALS, Literal{ .string = "==" });
-                    self.nextChar() catch {};
-                    break :token_switch;
+                    self.nextChar();
+                } else {
+                    token = self.createToken(TokenType.ASSIGN, Literal{ .char = self.current });
                 }
-                token = self.createToken(TokenType.ASSIGN, Literal{ .char = current });
             },
+            0 => token = self.createToken(TokenType.EOF, Literal{ .char = self.current }),
             else => {
                 const line: usize = self.line;
                 const column: usize = self.column;
 
-                if (std.ascii.isAlphabetic(current)) {
-                    const literal = try self.readIdent(); 
+                if (std.ascii.isAlphabetic(self.current)) {
+                    const literal = try self.readIdent();
 
                     if (self.keywords.get(literal)) |@"type"| {
                         defer self.allocator.free(literal);
-                        return Token{ 
-                            .type = @"type",
-                            .literal = Literal { .string = self.keywords.getKey(literal).? }, 
-                            .line = line, 
-                            .column = column 
-                        };
+                        return Token{ .type = @"type", .literal = Literal{ .string = self.keywords.getKey(literal).? }, .line = line, .column = column };
                     } else {
-                        return Token{ .type = TokenType.IDENT, .literal = Literal { .string = literal }, .line = line, .column = column };
+                        return Token{ .type = TokenType.IDENT, .literal = Literal{ .string = literal }, .line = line, .column = column };
                     }
-                    
-                } else if (std.ascii.isDigit(current)) {
+                } else if (std.ascii.isDigit(self.current)) {
                     const number = try self.readNumber();
-                    return Token{ .type = TokenType.INT, .literal = Literal { .string = number }, .line = line, .column = column };
+                    return Token{ .type = TokenType.INT, .literal = Literal{ .string = number }, .line = line, .column = column };
                 }
-                token = self.createToken(TokenType.ILLEGAL, Literal{ .char = current });
+                token = self.createToken(TokenType.ILLEGAL, Literal{ .char = self.current });
             },
         }
 
-        self.nextChar() catch {};
+        self.nextChar();
 
         return token;
     }

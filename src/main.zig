@@ -4,16 +4,21 @@ const monkey = @import("root.zig");
 const Scanner = monkey.scanner.Scanner;
 const DebugAllocator = std.heap.DebugAllocator;
 const TokenType = monkey.scanner.TokenType;
+const Reader = std.io.Reader;
 
 pub fn main() !void {
     var gpa: DebugAllocator(.{}) = .init;
 
     const allocator = gpa.allocator();
 
+    const reader: Reader = .fixed(
+            \\ [ ]{ }  (  )                   
+            \\ ;201;ankka let treu true false             
+        );
+
     var scanner: Scanner = try .init(
         allocator,
-        \\ [ ]{ }  (  )  
-        \\ ;201;ankka let treu true false
+        reader
     );
 
     var token = try scanner.nextToken();
