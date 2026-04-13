@@ -42,7 +42,9 @@ pub fn main() !void {
 
         const program = try parser.parseProgram();
 
-        try stdout.print("{}\n", .{program});
+        try parser.printErrors(stdout);
+        try stdout.print("{any}\n", .{program.statements});
+        try stdout.flush();
 
         for (program.statements) |statement| {
             try stdout.print("{}\n", .{statement});

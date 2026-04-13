@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const ArrayList = std.ArrayList;
 const StringHashMap = std.StringHashMap;
 const Reader = std.io.Reader;
@@ -18,12 +19,7 @@ pub const Token = struct {
 const ScannerError = error{EOFError};
 
 pub fn printToken(writer: *Writer, token: Token) !void {
-    try writer.print("Token {{ type = {}, ", .{token.type});
-    switch (token.literal) {
-        .char => |c| try writer.print("char = '{c}', ", .{c}),
-        .string => |s| try writer.print("string = \"{s}\", ", .{s}),
-    }
-    try writer.print("line = {}, column = {} }}\n", .{ token.line, token.column });
+    try writer.print("Token {{ type = {}, literal = \"{s}\", line = {}, column = {} }}\n", .{ token.type, token.literal, token.line, token.column });
 }
 
 pub const Scanner = struct {
@@ -45,7 +41,7 @@ pub const Scanner = struct {
         self.column += 1;
 
         if (self.current == '\n') {
-            self.column = 1;
+            self.column = 0;
             self.line += 1;
         }
     }
@@ -165,103 +161,106 @@ pub const Scanner = struct {
     }
 };
 
-pub fn assertTokensEqual(token: Token, case: Token) !void {
-    try std.testing.expect(token.type == case.type);
-    try std.testing.expect(std.mem.eql(u8, token.literal, case.literal));
-    try std.testing.expect(token.line == case.line);
-    try std.testing.expect(token.column == case.column);
+test "test one character tokens" {
+    const cases = [_]Token{ Token{
+        .type = TokenType.LBRACKET,
+        .literal = "[",
+        .line = 1,
+        .column = 2,
+    }, Token{
+        .type = TokenType.RBRACKET,
+        .literal = "]",
+        .line = 1,
+        .column = 4,
+    }, Token{
+        .type = TokenType.LBRACE,
+        .literal = "{",
+        .line = 1,
+        .column = 5,
+    }, Token{
+        .type = TokenType.RBRACE,
+        .literal = "}",
+        .line = 1,
+        .column = 7,
+    }, Token{
+        .type = TokenType.LPAREN,
+        .literal = "(",
+        .line = 1,
+        .column = 10,
+    }, Token{
+        .type = TokenType.RPAREN,
+        .literal = ")",
+        .line = 1,
+        .column = 13,
+    }, Token{
+        .type = TokenType.SEMICOLON,
+        .literal = ";",
+        .line = 2,
+        .column = 2,
+    }, Token{
+        .type = TokenType.SEMICOLON,
+        .literal = ";",
+        .line = 2,
+        .column = 3,
+    }, Token{
+        .type = TokenType.EOF,
+        .literal = "",
+        .line = 2,
+        .column = 4,
+    } };
+
+    var arena: ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    var scanner = try Scanner.init(allocator, Reader.fixed(
+        \\ [ ]{ }  (  )
+        \\ ;;
+    ));
+
+    for (cases) |case| {
+        const token = try scanner.nextToken();
+        try std.testing.expectEqualDeep(token, case);
+    }
+
+    const token = try scanner.nextToken();
+    try std.testing.expect(token.type == TokenType.EOF);
 }
 
-//  test "one character tokens" {
-//      const cases = [_]Token{ Token{
-//          .type = TokenType.LBRACKET,
-//          .literal = "[",
-//          .line = 1,
-//          .column = 2,
-//      }, Token{
-//          .type = TokenType.RBRACKET,
-//          .literal = "]",
-//          .line = 1,
-//          .column = 4,
-//      }, Token{
-//          .type = TokenType.LBRACE,
-//          .literal = "{",
-//          .line = 1,
-//          .column = 5,
-//      }, Token{
-//          .type = TokenType.RBRACE,
-//          .literal = "}",
-//          .line = 1,
-//          .column = 7,
-//      }, Token{
-//          .type = TokenType.LPAREN,
-//          .literal = "(",
-//          .line = 1,
-//          .column = 10,
-//      }, Token{
-//          .type = TokenType.RPAREN,
-//          .literal = ")",
-//          .line = 1,
-//          .column = 13,
-//      }, Token{
-//          .type = TokenType.SEMICOLON,
-//          .literal = ";",
-//          .line = 2,
-//          .column = 2,
-//      }, Token{
-//          .type = TokenType.SEMICOLON,
-//          .literal = ";",
-//          .line = 2,
-//          .column = 3,
-//      }, Token{
-//          .type = TokenType.EOF,
-//          .literal = "",
-//          .line = 2,
-//          .column = 4,
-//      } };
-//
-//      var scanner = Scanner.init(std.testing.allocator,
-//          \\ [ ]{ }  (  )
-//          \\ ;;
-//      );
-//
-//      for (cases) |case| {
-//          const token = scanner.nextToken();
-//          try assertTokensEqual(token, case);
-//      }
-//
-//      const token = scanner.nextToken();
-//      try std.testing.expect(token.type == TokenType.EOF);
-//  }
-//
-//  test "two character tokens" {
-//      const cases = [_]Token{ Token{
-//          .type = TokenType.EQUALS,
-//          .literal = "==",
-//          .line = 1,
-//          .column = 1,
-//      }, Token{
-//          .type = TokenType.NOT_EQUALS,
-//          .literal = "!=",
-//          .line = 2,
-//          .column = 3,
-//      }, Token{
-//          .type = TokenType.EOF,
-//          .literal = "",
-//          .line = 2,
-//          .column = 5,
-//      } };
-//
-//      var scanner = Scanner.init(std.testing.allocator,
-//          \\==
-//          \\  !=
-//      );
-//
-//      for (cases) |case| {
-//          const token = scanner.nextToken();
-//          try assertTokensEqual(token, case);
-//      }
-//
-//      const token = scanner.nextToken();
-//      try std.testing.expect(token.type == TokenType.EOF);
-//  }
+test "test two character tokens" {
+    const cases = [_]Token{ Token{
+        .type = TokenType.EQUALS,
+        .literal = "==",
+        .line = 1,
+        .column = 1,
+    }, Token{
+        .type = TokenType.NOT_EQUALS,
+        .literal = "!=",
+        .line = 2,
+        .column = 3,
+    }, Token{
+        .type = TokenType.EOF,
+        .literal = "",
+        .line = 2,
+        .column = 5,
+    } };
+
+    var arena: ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    var scanner = try Scanner.init(allocator, Reader.fixed(
+        \\==
+        \\  !=
+    ));
+
+    for (cases) |case| {
+        const token = try scanner.nextToken();
+        try std.testing.expectEqualDeep(token, case);
+    }
+
+    const token = try scanner.nextToken();
+    try std.testing.expect(token.type == TokenType.EOF);
+}

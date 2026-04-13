@@ -10,6 +10,8 @@ const Literal = monkeyScanner.Literal;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Reader = std.Io.Reader;
+const Writer = std.Io.Writer;
+const print = std.debug.print;
 
 pub const ParserError = error{
     UnexpectedTokenError,
@@ -20,6 +22,7 @@ pub const Parser = struct {
     scanner: *Scanner,
     current: Token,
     ahead: Token,
+    errors: ArrayList([]const u8),
 
     pub fn init(allocator: Allocator, scanner: *Scanner) !@This() {
         return @This(){
@@ -27,6 +30,7 @@ pub const Parser = struct {
             .scanner = scanner,
             .current = try scanner.nextToken(),
             .ahead = try scanner.nextToken(),
+            .errors = ArrayList([]const u8).empty,
         };
     }
 
@@ -35,11 +39,23 @@ pub const Parser = struct {
         self.ahead = try self.scanner.nextToken();
     }
 
-    fn expectCurrentToken(self: *@This(), expect: TokenType) !void {
-        if (self.current.type != expect) return ParserError.UnexpectedTokenError;
+    fn currentTokenIs(self: *@This(), expect: TokenType) bool {
+        return self.current.type == expect;
     }
-    fn expectAheadToken(self: *@This(), expect: TokenType) !void {
-        if (self.ahead.type != expect) return ParserError.UnexpectedTokenError;
+
+    fn aheadTokenIs(self: *@This(), expect: TokenType) bool {
+        return self.ahead.type == expect;
+    }
+
+    fn expectAhead(self: *@This(), expect: TokenType) !bool {
+        if (self.aheadTokenIs(expect)) {
+            try self.nextToken();
+            return true;
+        } else {
+            const errorMsg = try std.fmt.allocPrint(self.allocator, "Unexpected token of type '{}' found when '{}' was expected.\n", .{ self.ahead.type, expect });
+            try self.errors.append(self.allocator, errorMsg);
+            return false;
+        }
     }
 
     fn parseExpression(self: *@This()) ?ast.Expression {
@@ -51,7 +67,7 @@ pub const Parser = struct {
     }
 
     fn parseIdentifier(self: *@This()) ?ast.Identifier {
-        self.expectCurrentToken(TokenType.IDENT) catch return null;
+        if (!self.currentTokenIs(TokenType.IDENT)) return null;
         return ast.Identifier{
             .token = self.current,
             .name = self.current.literal,
@@ -59,7 +75,7 @@ pub const Parser = struct {
     }
 
     fn parseInteger(self: *@This()) ?ast.Integer {
-        self.expectCurrentToken(TokenType.INT) catch return null;
+        if (!self.currentTokenIs(TokenType.INT)) return null;
         return ast.Integer{
             .token = self.current,
             .value = std.fmt.parseInt(i64, self.current.literal, 0) catch unreachable,
@@ -69,21 +85,36 @@ pub const Parser = struct {
     fn parseLetStatement(self: *@This()) !?ast.LetStatement {
         const token = self.current;
 
-        self.expectAheadToken(TokenType.IDENT) catch return null;
-        try self.nextToken();
+        if (!try self.expectAhead(TokenType.IDENT)) return null;
 
         const identifier = self.parseIdentifier() orelse return null;
 
-        self.expectAheadToken(TokenType.ASSIGN) catch return null;
-        try self.nextToken();
+        if (!try self.expectAhead(TokenType.ASSIGN)) return null;
 
         try self.nextToken();
 
         const expression = self.parseExpression() orelse return null;
 
+        if (!try self.expectAhead(TokenType.SEMICOLON)) return null;
+
         return ast.LetStatement{
             .token = token,
             .identifier = identifier,
+            .expression = expression,
+        };
+    }
+
+    fn parseReturnStatement(self: *@This()) !?ast.ReturnStatement {
+        const token = self.current;
+
+        try self.nextToken();
+
+        const expression = self.parseExpression() orelse return null;
+
+        if (!try self.expectAhead(TokenType.SEMICOLON)) return null;
+
+        return ast.ReturnStatement{
+            .token = token,
             .expression = expression,
         };
     }
@@ -100,6 +131,10 @@ pub const Parser = struct {
                     const letStatement = try self.parseLetStatement();
                     if (letStatement) |ls| statement = ast.Statement{ .letStatement = ls };
                 },
+                TokenType.RETURN => {
+                    const returnStatement = try self.parseReturnStatement();
+                    if (returnStatement) |rs| statement = ast.Statement{ .returnStatement = rs };
+                },
                 else => {},
             }
 
@@ -112,9 +147,13 @@ pub const Parser = struct {
 
         return ast.Program{ .statements = try statements.toOwnedSlice(self.allocator) };
     }
-};
 
-// pub fn programCleanup(program: ast.Program) void {}
+    pub fn printErrors(self: @This(), writer: *Writer) !void {
+        for (self.errors.items) |err| {
+            try writer.print("{s}\n", .{err});
+        }
+    }
+};
 
 fn expectLetStatement(statement: ast.Statement, name: []const u8) !void {
     switch (statement) {
@@ -127,27 +166,95 @@ fn expectLetStatement(statement: ast.Statement, name: []const u8) !void {
     }
 }
 
-test "parse let statements" {
+test "parse statements" {
     const input =
         \\let num = 5;
         \\let ankka = num;
-        \\let number = 15;
+        \\return ankka;
     ;
 
-    const Case = struct {
-        name: []const u8,
-    };
-
-    const cases = [_]Case{
-        Case{
-            .name = "num",
+    const cases = [_]ast.Statement{
+        ast.Statement{
+            .letStatement = ast.LetStatement{
+                .token = Token{
+                    .type = TokenType.LET,
+                    .literal = "let",
+                    .line = 1,
+                    .column = 1
+                },
+                .identifier = ast.Identifier{ 
+                    .token = Token{
+                        .type = TokenType.IDENT,
+                        .literal = "num",
+                        .line = 1,
+                        .column = 5,
+                    },
+                    .name = "num"
+                },
+                .expression = ast.Expression{
+                    .integer = ast.Integer{
+                        .token = Token{
+                            .type = TokenType.INT,
+                            .literal = "5",
+                            .line = 1,
+                            .column = 11,
+                        },
+                        .value = 5,
+                    }
+                },
+            }
         },
-        Case{
-            .name = "ankka",
+        ast.Statement{
+            .letStatement = ast.LetStatement{
+                .token = Token{
+                    .type = TokenType.LET,
+                    .literal = "let",
+                    .line = 2,
+                    .column = 1
+                },
+                .identifier = ast.Identifier{ 
+                    .token = Token{
+                        .type = TokenType.IDENT,
+                        .literal = "ankka",
+                        .line = 2,
+                        .column = 5,
+                    },
+                    .name = "ankka"
+                },
+                .expression = ast.Expression{
+                    .identifier = ast.Identifier{
+                        .token = Token{
+                            .type = TokenType.IDENT,
+                            .literal = "num",
+                            .line = 2,
+                            .column = 13,
+                        },
+                        .name = "num",
+                    }
+                },
+            }
         },
-        Case{
-            .name = "number",
-        },
+        ast.Statement{
+            .returnStatement = ast.ReturnStatement{
+                .token = Token{
+                    .type = TokenType.RETURN,
+                    .literal = "return",
+                    .line = 3,
+                    .column = 1,
+                },
+                .expression = ast.Expression{
+                    .identifier = ast.Identifier{
+                        .token = Token{
+                            .type = TokenType.IDENT,
+                            .literal = "ankka",
+                            .line = 3,
+                            .column = 8,
+                        },
+                        .name = "ankka",
+                    }
+                }
+            }
+        }
     };
 
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
@@ -162,9 +269,9 @@ test "parse let statements" {
 
     const program: ast.Program = try parser.parseProgram();
 
-    try std.testing.expect(program.statements.len == cases.len);
+    try std.testing.expectEqual(cases.len, program.statements.len);
 
     for (program.statements, cases) |statement, case| {
-        try expectLetStatement(statement, case.name);
+        try std.testing.expectEqualDeep(case, statement);
     }
 }
