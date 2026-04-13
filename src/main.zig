@@ -2,39 +2,51 @@ const std = @import("std");
 const monkey = @import("root.zig");
 
 const Scanner = monkey.scanner.Scanner;
+const Parser = monkey.parser.Parser;
 const DebugAllocator = std.heap.DebugAllocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const TokenType = monkey.scanner.TokenType;
 const Reader = std.io.Reader;
+const Writer = std.io.Writer;
 
 pub fn main() !void {
-    var gpa: DebugAllocator(.{}) = .init;
+    var stdoutBuf: [256]u8 = undefined;
+    var stdoutWriter = std.fs.File.stdout().writer(&stdoutBuf);
+    const stdout: *Writer = &stdoutWriter.interface;
 
-    const allocator = gpa.allocator();
+    var stdinBuf: [256]u8 = undefined;
+    var stdinReader = std.fs.File.stdin().reader(&stdinBuf);
+    const stdin: *Reader = &stdinReader.interface;
 
-    const reader: Reader = .fixed(
-            \\ [ ]{ }  (  )                   
-            \\ ;201;ankka let treu true false             
+    try stdout.print("Hello user! This is the Monkey programming language!\n", .{});
+    try stdout.print("Feel free to type in commands\n", .{});
+
+    while (true) {
+        var gpa: DebugAllocator(.{}) = .init;
+        var arena: ArenaAllocator = .init(gpa.allocator());
+        defer arena.deinit();
+
+        const allocator = arena.allocator();
+
+        try stdout.print(">> ", .{});
+        try stdout.flush();
+
+        const input = try stdin.takeDelimiter('\n') orelse return;
+
+        var scanner: Scanner = try .init(
+            allocator,
+            Reader.fixed(input),
         );
 
-    var scanner: Scanner = try .init(
-        allocator,
-        reader
-    );
+        var parser: Parser = try .init(allocator, &scanner);
 
-    var token = try scanner.nextToken();
-    while (token.type != TokenType.EOF) {
-        monkey.scanner.printToken(token);
+        const program = try parser.parseProgram();
 
-        switch (token.literal) {
-            .char => {},
-            .string => |s|
-                switch (token.type) {
-                    TokenType.IDENT => allocator.free(s), 
-                    TokenType.INT => allocator.free(s), 
-                    else => {} 
-                }
+        try stdout.print("{}\n", .{program});
+
+        for (program.statements) |statement| {
+            try stdout.print("{}\n", .{statement});
         }
-
-        token = try scanner.nextToken();
+        try stdout.flush();
     }
 }
