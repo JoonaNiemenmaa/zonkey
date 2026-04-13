@@ -52,7 +52,8 @@ pub const Parser = struct {
             try self.nextToken();
             return true;
         } else {
-            const errorMsg = try std.fmt.allocPrint(self.allocator, "Unexpected token of type '{}' found when '{}' was expected.\n", .{ self.ahead.type, expect });
+            const format = "Unexpected token of type '{}' found when '{}' was expected.";
+            const errorMsg = try std.fmt.allocPrint(self.allocator, format, .{ self.ahead.type, expect });
             try self.errors.append(self.allocator, errorMsg);
             return false;
         }
