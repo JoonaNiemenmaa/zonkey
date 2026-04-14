@@ -9,6 +9,7 @@ const TokenType = monkeyScanner.TokenType;
 const Literal = monkeyScanner.Literal;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
+const AutoHashMap = std.AutoArrayHashMap;
 const Reader = std.Io.Reader;
 const Writer = std.Io.Writer;
 const print = std.debug.print;
@@ -23,7 +24,12 @@ pub const Parser = struct {
     current: Token,
     ahead: Token,
     errors: ArrayList([]const u8),
-
+    
+    const LOWEST = 0;
+    const SUM = 1;
+    const PRODUCT = 2;
+    const CALL = 3;
+    
     pub fn init(allocator: Allocator, scanner: *Scanner) !@This() {
         return @This(){
             .allocator = allocator,
@@ -59,16 +65,7 @@ pub const Parser = struct {
         }
     }
 
-    fn parseExpression(self: *@This()) ?ast.Expression {
-        switch (self.current.type) {
-            TokenType.IDENT => return ast.Expression{ .identifier = self.parseIdentifier() orelse return null },
-            TokenType.INT => return ast.Expression{ .integer = self.parseInteger() orelse return null },
-            else => return null,
-        }
-    }
-
     fn parseIdentifier(self: *@This()) ?ast.Identifier {
-        if (!self.currentTokenIs(TokenType.IDENT)) return null;
         return ast.Identifier{
             .token = self.current,
             .name = self.current.literal,
@@ -76,11 +73,63 @@ pub const Parser = struct {
     }
 
     fn parseInteger(self: *@This()) ?ast.Integer {
-        if (!self.currentTokenIs(TokenType.INT)) return null;
         return ast.Integer{
             .token = self.current,
             .value = std.fmt.parseInt(i64, self.current.literal, 0) catch unreachable,
         };
+    }
+
+    fn parseInfix(self: *@This(), left: ast.Expression) !?ast.Infix {
+        const token = self.current;
+
+        const operator: ast.InfixOperator = switch (token.type) {
+            TokenType.PLUS => ast.InfixOperator.ADD,
+            TokenType.MINUS => ast.InfixOperator.SUBTRACT,
+            TokenType.ASTERISK => ast.InfixOperator.MULTIPLY,
+            TokenType.SLASH => ast.InfixOperator.DIVIDE,
+            else => unreachable,
+        };
+
+        try self.nextToken();
+
+        const right = try self.parseExpression() orelse return null;
+
+        return ast.Infix{
+            .token = token,
+            .operator = operator,
+            .left = left,
+            .right = right,
+        };
+    }
+
+    fn parseExpression(self: *@This()) !?ast.Expression {
+
+        switch (self.current.type) {
+            TokenType.IDENT => return ast.Expression{ .identifier = self.parseIdentifier() orelse return null },
+            TokenType.INT => return ast.Expression{ .integer = self.parseInteger() orelse return null },
+            else => return null,
+        }
+
+//      var left: ast.Expression = switch (self.current.type) {
+//          TokenType.IDENT => ast.Expression{ .identifier = self.parseIdentifier() orelse return null },
+//          TokenType.INT => ast.Expression{ .integer = self.parseInteger() orelse return null },
+//          else => return null,
+//      };
+//
+//      while (!self.aheadTokenIs(TokenType.SEMICOLON)) {
+//          try self.nextToken();
+//          left = ast.Expression{
+//              .infix = switch (self.current.type) {
+//                  TokenType.PLUS => try self.parseInfix(left) orelse return null,
+//                  TokenType.MINUS => try self.parseInfix(left) orelse return null,
+//                  TokenType.ASTERISK => try self.parseInfix(left) orelse return null,
+//                  TokenType.SLASH => try self.parseInfix(left) orelse return null,
+//                  else => unreachable,
+//              }
+//          };
+//      }
+//
+//      return left;
     }
 
     fn parseLetStatement(self: *@This()) !?ast.LetStatement {
@@ -94,7 +143,7 @@ pub const Parser = struct {
 
         try self.nextToken();
 
-        const expression = self.parseExpression() orelse return null;
+        const expression = try self.parseExpression() orelse return null;
 
         if (!try self.expectAhead(TokenType.SEMICOLON)) return null;
 
@@ -110,13 +159,20 @@ pub const Parser = struct {
 
         try self.nextToken();
 
-        const expression = self.parseExpression() orelse return null;
+        const expression = try self.parseExpression() orelse return null;
 
         if (!try self.expectAhead(TokenType.SEMICOLON)) return null;
 
         return ast.ReturnStatement{
             .token = token,
             .expression = expression,
+        };
+    }
+
+    fn parseExpressionStatement(self: *@This()) !?ast.ExpressionStatement {
+        return ast.ExpressionStatement{
+            .token = self.current,
+            .expression = try self.parseExpression() orelse return null,
         };
     }
 
@@ -136,7 +192,10 @@ pub const Parser = struct {
                     const returnStatement = try self.parseReturnStatement();
                     if (returnStatement) |rs| statement = ast.Statement{ .returnStatement = rs };
                 },
-                else => {},
+                else => {
+                    const expressionStatement = try self.parseExpressionStatement();
+                    if (expressionStatement) |es| statement = ast.Statement{ .expressionStatement = es };
+                },
             }
 
             if (statement) |s| {
@@ -276,3 +335,4 @@ test "parse statements" {
         try std.testing.expectEqualDeep(case, statement);
     }
 }
+

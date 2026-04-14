@@ -43,10 +43,10 @@ pub fn main() !void {
         const program = try parser.parseProgram();
 
         try parser.printErrors(stdout);
-
-        for (program.statements) |statement| {
-            try stdout.print("{}\n", .{statement});
-        }
+        try program.printProgram(stdout);
+//      for (program.statements) |statement| {
+//          try stdout.print("{}\n", .{statement});
+//      }
         try stdout.flush();
     }
 }
