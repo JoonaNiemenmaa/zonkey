@@ -1,20 +1,22 @@
 const std = @import("std");
 const monkey = @import("root.zig");
 
-const Scanner = monkey.scanner.Scanner;
-const Parser = monkey.parser.Parser;
 const DebugAllocator = std.heap.DebugAllocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
-const TokenType = monkey.scanner.TokenType;
 const Reader = std.io.Reader;
 const Writer = std.io.Writer;
 
+const Scanner = monkey.scanner.Scanner;
+const Parser = monkey.parser.Parser;
+
+const BUFFER_SIZE = 256;
+
 pub fn main() !void {
-    var stdoutBuf: [256]u8 = undefined;
+    var stdoutBuf: [BUFFER_SIZE]u8 = undefined;
     var stdoutWriter = std.fs.File.stdout().writer(&stdoutBuf);
     const stdout: *Writer = &stdoutWriter.interface;
 
-    var stdinBuf: [256]u8 = undefined;
+    var stdinBuf: [BUFFER_SIZE]u8 = undefined;
     var stdinReader = std.fs.File.stdin().reader(&stdinBuf);
     const stdin: *Reader = &stdinReader.interface;
 
@@ -33,16 +35,15 @@ pub fn main() !void {
 
         const input = try stdin.takeDelimiter('\n') orelse return;
 
-        var scanner: Scanner = try .init(
-            allocator,
-            Reader.fixed(input),
+        var scanner: Scanner = .init(
+            input
         );
 
-        var parser: Parser = try .init(allocator, &scanner);
+        var parser: Parser = .init(allocator, &scanner);
 
         const program = try parser.parseProgram();
 
-        try parser.printErrors(stdout);
+        parser.printErrors();
         try program.printProgram(stdout);
         try stdout.flush();
     }

@@ -1,11 +1,13 @@
 const std = @import("std");
-const scanner = @import("scanner.zig");
-const Token = scanner.Token;
+const monkey = @import("root.zig");
+
 const Writer = std.Io.Writer;
 const ArrayList = std.ArrayList;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const DebugAllocator = std.heap.DebugAllocator;
 const Allocator = std.mem.Allocator;
+
+const Token = monkey.token.Token;
 
 pub const Program = struct {
     statements: []Statement,

@@ -1,17 +1,14 @@
 const std = @import("std");
-const ast = @import("ast.zig");
-const monkeyScanner = @import("scanner.zig");
+const monkey = @import("root.zig");
+const ast = monkey.ast;
 
-const Scanner = monkeyScanner.Scanner;
-const assertTokensEqual = monkeyScanner.assertTokensEqual;
-const Token = monkeyScanner.Token;
-const TokenType = monkeyScanner.TokenType;
-const Literal = monkeyScanner.Literal;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
-const AutoHashMap = std.AutoArrayHashMap;
-const Reader = std.Io.Reader;
-const Writer = std.Io.Writer;
+
+const Scanner = monkey.scanner.Scanner;
+const Token = monkey.token.Token;
+const TokenType = monkey.token.TokenType;
+
 const print = std.debug.print;
 
 pub const Parser = struct {
@@ -21,24 +18,23 @@ pub const Parser = struct {
     ahead: Token,
     errors: ArrayList([]const u8),
 
-    fn appendError(self: *@This(), comptime format: []const u8, args: anytype) !void {
-        const errorMsg = try std.fmt.allocPrint(self.allocator, format, args);
-        try self.errors.append(self.allocator, errorMsg);
-    }
-
-    pub fn init(allocator: Allocator, scanner: *Scanner) !@This() {
+    pub fn init(allocator: Allocator, scanner: *Scanner) @This() {
         return @This(){
             .allocator = allocator,
             .scanner = scanner,
-            .current = try scanner.nextToken(),
-            .ahead = try scanner.nextToken(),
+            .current = scanner.nextToken(),
+            .ahead = scanner.nextToken(),
             .errors = ArrayList([]const u8).empty,
         };
     }
 
-    fn nextToken(self: *@This()) !void {
+    fn appendError(self: *@This(), comptime format: []const u8, args: anytype) !void {
+        try self.errors.print(self.allocator, format, args);
+    }
+
+    fn nextToken(self: *@This()) void {
         self.current = self.ahead;
-        self.ahead = try self.scanner.nextToken();
+        self.ahead = self.scanner.nextToken();
     }
 
     fn currentTokenIs(self: *@This(), expect: TokenType) bool {
@@ -51,7 +47,7 @@ pub const Parser = struct {
 
     fn expectAhead(self: *@This(), expect: TokenType) !bool {
         if (self.aheadTokenIs(expect)) {
-            try self.nextToken();
+            self.nextToken();
             return true;
         } else {
             try self.appendError("Unexpected token of type '{}' found when '{}' was expected.", .{ self.ahead.type, expect });
@@ -98,7 +94,7 @@ pub const Parser = struct {
         var alternative: ?ast.Block = null;
 
         if (self.aheadTokenIs(TokenType.ELSE)) {
-            try self.nextToken();
+            self.nextToken();
 
             if (!try self.expectAhead(TokenType.LBRACE)) return null;
 
@@ -116,7 +112,7 @@ pub const Parser = struct {
     fn parsePrefix(self: *@This(), operator: ast.PrefixOperator) Allocator.Error!?ast.Prefix {
         const token = self.current;
 
-        try self.nextToken();
+        self.nextToken();
 
         const expression = try self.parseExpression(Precedence.PREFIX) orelse return null;
 
@@ -130,7 +126,7 @@ pub const Parser = struct {
     fn parseInfix(self: *@This(), operator: ast.InfixOperator, left: *ast.Expression) Allocator.Error!?ast.Infix {
         const token = self.current;
 
-        try self.nextToken();
+        self.nextToken();
 
         const right = try self.parseExpression(getPrecedence(token.type)) orelse return null;
 
@@ -142,8 +138,7 @@ pub const Parser = struct {
         };
     }
 
-    fn parseGroupedExpression(self: *@This()) !?*ast.Expression {
-        try self.nextToken();
+    fn parseGroupedExpression(self: *@This()) !?*ast.Expression { self.nextToken();
 
         const expression = try self.parseExpression(Precedence.LOWEST) orelse return null;
 
@@ -200,7 +195,7 @@ pub const Parser = struct {
             !self.aheadTokenIs(TokenType.RPAREN) and
             @intFromEnum(precedence) < @intFromEnum(getPrecedence(self.ahead.type)))
         {
-            try self.nextToken();
+            self.nextToken();
             const infix = try self.allocator.create(ast.Expression);
             errdefer self.allocator.destroy(infix);
 
@@ -233,7 +228,7 @@ pub const Parser = struct {
 
         if (!try self.expectAhead(TokenType.ASSIGN)) return null;
 
-        try self.nextToken();
+        self.nextToken();
 
         const expression = try self.parseExpression(Precedence.LOWEST) orelse return null;
 
@@ -249,7 +244,7 @@ pub const Parser = struct {
     fn parseReturnStatement(self: *@This()) !?ast.ReturnStatement {
         const token = self.current;
 
-        try self.nextToken();
+        self.nextToken();
 
         const expression = try self.parseExpression(Precedence.LOWEST) orelse return null;
 
@@ -266,7 +261,7 @@ pub const Parser = struct {
         const expression = try self.parseExpression(Precedence.LOWEST) orelse return null;
 
         if (self.aheadTokenIs(TokenType.SEMICOLON)) {
-            try self.nextToken();
+            self.nextToken();
         }
 
         return ast.ExpressionStatement{
@@ -278,7 +273,7 @@ pub const Parser = struct {
     fn parseBlock(self: *@This()) !ast.Block {
         const token = self.current;
 
-        try self.nextToken();
+        self.nextToken();
 
         var statements: ArrayList(ast.Statement) = .empty;
         errdefer statements.deinit(self.allocator);
@@ -288,7 +283,7 @@ pub const Parser = struct {
 
             if (statement) |s| try statements.append(self.allocator, s);
 
-            try self.nextToken();
+            self.nextToken();
         }
 
         return ast.Block{
@@ -324,15 +319,15 @@ pub const Parser = struct {
 
             if (statement) |s| try statements.append(self.allocator, s);
 
-            try self.nextToken();
+            self.nextToken();
         }
 
         return ast.Program{ .statements = try statements.toOwnedSlice(self.allocator) };
     }
 
-    pub fn printErrors(self: @This(), writer: *Writer) !void {
+    pub fn printErrors(self: @This()) void {
         for (self.errors.items) |err| {
-            try writer.print("{s}\n", .{err});
+            std.debug.print("{s}\n", .{err});
         }
     }
 };

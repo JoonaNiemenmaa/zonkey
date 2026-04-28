@@ -1,9 +1,9 @@
 const std = @import("std");
-const token_zig = @import("token.zig");
+const monkey = @import("root.zig");
 
-const TokenType = token_zig.TokenType;
-const Token = token_zig.Token;
-const lookupKeyword = token_zig.lookupKeyword;
+const TokenType = monkey.token.TokenType;
+const Token = monkey.token.Token;
+const lookupKeyword = monkey.token.lookupKeyword;
 
 pub const Scanner = struct {
     code: []const u8,
@@ -36,7 +36,7 @@ pub const Scanner = struct {
         }
     }
 
-    pub fn init(code: []const u8) !@This() {
+    pub fn init(code: []const u8) @This() {
         return Scanner{ 
             .code = code,
             .current = 0,

@@ -1,14 +1,12 @@
 const std = @import("std");
-const ast = @import("ast.zig");
-const monkeyScanner = @import("scanner.zig");
-const monkeyParser = @import("parser.zig");
+const monkey = @import("root.zig");
 
-const Scanner = monkeyScanner.Scanner;
-const Parser = monkeyParser.Parser;
-const Token = monkeyScanner.Token;
-const TokenType = monkeyScanner.TokenType;
-const Literal = monkeyScanner.Literal;
 const Reader = std.io.Reader;
+
+const ast = monkey.ast;
+const Scanner = monkey.scanner.Scanner;
+const Parser = monkey.parser.Parser;
+const Token = monkey.token.Token;
 
 test "parse statements" {
     const input =
@@ -18,16 +16,16 @@ test "parse statements" {
     ;
 
     const cases = [_]ast.Statement{ ast.Statement{ .letStatement = ast.LetStatement{
-        .token = Token{ .type = TokenType.LET, .literal = "let", .line = 1, .column = 1 },
+        .token = Token{ .type = .LET, .literal = "let", .line = 1, .column = 1 },
         .identifier = ast.Identifier{ .token = Token{
-            .type = TokenType.IDENT,
+            .type = .IDENT,
             .literal = "num",
             .line = 1,
             .column = 5,
         }, .name = "num" },
         .expression = &ast.Expression{ .integer = ast.Integer{
             .token = Token{
-                .type = TokenType.INT,
+                .type = .INT,
                 .literal = "5",
                 .line = 1,
                 .column = 11,
@@ -35,16 +33,16 @@ test "parse statements" {
             .value = 5,
         } },
     } }, ast.Statement{ .letStatement = ast.LetStatement{
-        .token = Token{ .type = TokenType.LET, .literal = "let", .line = 2, .column = 1 },
+        .token = Token{ .type = .LET, .literal = "let", .line = 2, .column = 1 },
         .identifier = ast.Identifier{ .token = Token{
-            .type = TokenType.IDENT,
+            .type = .IDENT,
             .literal = "ankka",
             .line = 2,
             .column = 5,
         }, .name = "ankka" },
         .expression = &ast.Expression{ .identifier = ast.Identifier{
             .token = Token{
-                .type = TokenType.IDENT,
+                .type = .IDENT,
                 .literal = "num",
                 .line = 2,
                 .column = 13,
@@ -52,13 +50,13 @@ test "parse statements" {
             .name = "num",
         } },
     } }, ast.Statement{ .returnStatement = ast.ReturnStatement{ .token = Token{
-        .type = TokenType.RETURN,
+        .type = .RETURN,
         .literal = "return",
         .line = 3,
         .column = 1,
     }, .expression = &ast.Expression{ .identifier = ast.Identifier{
         .token = Token{
-            .type = TokenType.IDENT,
+            .type = .IDENT,
             .literal = "ankka",
             .line = 3,
             .column = 8,
@@ -71,10 +69,9 @@ test "parse statements" {
 
     const allocator = arena.allocator();
 
-    var scanner: Scanner = try .init(allocator, Reader.fixed(input));
-    defer scanner.deinit();
+    var scanner: Scanner = .init(input);
 
-    var parser: Parser = try .init(allocator, &scanner);
+    var parser: Parser = .init(allocator, &scanner);
 
     const program: ast.Program = try parser.parseProgram();
 
@@ -115,10 +112,9 @@ test "test precedence" {
 
         const allocator = arena.allocator();
 
-        var scanner: Scanner = try .init(allocator, Reader.fixed(case.@"test"));
-        defer scanner.deinit();
+        var scanner: Scanner = .init(case.@"test");
 
-        var parser: Parser = try .init(allocator, &scanner);
+        var parser: Parser = .init(allocator, &scanner);
 
         const program: ast.Program = try parser.parseProgram();
 
@@ -147,7 +143,7 @@ test "test parsing expressions" {
         ast.Statement{
             .expressionStatement = ast.ExpressionStatement{
                 .token = Token{
-                    .type = TokenType.INT,
+                    .type = .INT,
                     .literal = "5",
                     .line = 1,
                     .column = 1,
@@ -155,7 +151,7 @@ test "test parsing expressions" {
                 .expression = &ast.Expression{
                     .integer = ast.Integer{
                         .token = Token{
-                            .type = TokenType.INT,
+                            .type = .INT,
                             .literal = "5",
                             .line = 1,
                             .column = 1,
@@ -168,7 +164,7 @@ test "test parsing expressions" {
         ast.Statement{
             .expressionStatement = ast.ExpressionStatement{
                 .token = Token{
-                    .type = TokenType.IDENT,
+                    .type = .IDENT,
                     .literal = "joona",
                     .line = 2,
                     .column = 1,
@@ -176,7 +172,7 @@ test "test parsing expressions" {
                 .expression = &ast.Expression{
                     .identifier = ast.Identifier{
                         .token = Token{
-                            .type = TokenType.IDENT,
+                            .type = .IDENT,
                             .literal = "joona",
                             .line = 2,
                             .column = 1,
@@ -189,7 +185,7 @@ test "test parsing expressions" {
         ast.Statement{
             .expressionStatement = ast.ExpressionStatement{
                 .token = Token{
-                    .type = TokenType.TRUE,
+                    .type = .TRUE,
                     .literal = "true",
                     .line = 3,
                     .column = 1,
@@ -197,7 +193,7 @@ test "test parsing expressions" {
                 .expression = &ast.Expression{
                     .boolean = ast.Boolean{
                         .token = Token{
-                            .type = TokenType.TRUE,
+                            .type = .TRUE,
                             .literal = "true",
                             .line = 3,
                             .column = 1,
@@ -210,7 +206,7 @@ test "test parsing expressions" {
         ast.Statement{
             .expressionStatement = ast.ExpressionStatement{
                 .token = Token{
-                    .type = TokenType.FALSE,
+                    .type = .FALSE,
                     .literal = "false",
                     .line = 4,
                     .column = 1,
@@ -218,7 +214,7 @@ test "test parsing expressions" {
                 .expression = &ast.Expression{
                     .boolean = ast.Boolean{
                         .token = Token{
-                            .type = TokenType.FALSE,
+                            .type = .FALSE,
                             .literal = "false",
                             .line = 4,
                             .column = 1,
@@ -231,7 +227,7 @@ test "test parsing expressions" {
         ast.Statement{
             .expressionStatement = ast.ExpressionStatement{
                 .token = Token{
-                    .type = TokenType.MINUS,
+                    .type = .MINUS,
                     .literal = "-",
                     .line = 5,
                     .column = 1,
@@ -239,7 +235,7 @@ test "test parsing expressions" {
                 .expression = &ast.Expression{
                     .prefix = ast.Prefix{
                         .token = Token{
-                            .type = TokenType.MINUS,
+                            .type = .MINUS,
                             .literal = "-",
                             .line = 5,
                             .column = 1,
@@ -248,7 +244,7 @@ test "test parsing expressions" {
                         .operand = &ast.Expression{
                             .integer = ast.Integer{
                                 .token = Token{
-                                    .type = TokenType.INT,
+                                    .type = .INT,
                                     .literal = "5",
                                     .line = 5,
                                     .column = 2,
@@ -263,7 +259,7 @@ test "test parsing expressions" {
         ast.Statement{
             .expressionStatement = ast.ExpressionStatement{
                 .token = Token{
-                    .type = TokenType.BANG,
+                    .type = .BANG,
                     .literal = "!",
                     .line = 6,
                     .column = 1,
@@ -271,7 +267,7 @@ test "test parsing expressions" {
                 .expression = &ast.Expression{
                     .prefix = ast.Prefix{
                         .token = Token{
-                            .type = TokenType.BANG,
+                            .type = .BANG,
                             .literal = "!",
                             .line = 6,
                             .column = 1,
@@ -280,7 +276,7 @@ test "test parsing expressions" {
                         .operand = &ast.Expression{
                             .boolean = ast.Boolean{
                                 .token = Token{
-                                    .type = TokenType.TRUE,
+                                    .type = .TRUE,
                                     .literal = "true",
                                     .line = 6,
                                     .column = 2,
@@ -295,7 +291,7 @@ test "test parsing expressions" {
         ast.Statement{
             .expressionStatement = ast.ExpressionStatement{
                 .token = Token{
-                    .type = TokenType.INT,
+                    .type = .INT,
                     .literal = "5",
                     .line = 7,
                     .column = 1,
@@ -303,16 +299,16 @@ test "test parsing expressions" {
                 .expression = &ast.Expression{
                     .infix = ast.Infix{
                         .token = Token{
-                            .type = TokenType.PLUS,
+                            .type = .PLUS,
                             .literal = "+",
                             .line = 7,
                             .column = 3,
                         },
-                        .operator = ast.InfixOperator.ADD,
+                        .operator = .ADD,
                         .left = &ast.Expression{
                             .integer = ast.Integer{
                                 .token = Token{
-                                    .type = TokenType.INT,
+                                    .type = .INT,
                                     .literal = "5",
                                     .line = 7,
                                     .column = 1,
@@ -323,7 +319,7 @@ test "test parsing expressions" {
                         .right = &ast.Expression{
                             .integer = ast.Integer{
                                 .token = Token{
-                                    .type = TokenType.INT,
+                                    .type = .INT,
                                     .literal = "5",
                                     .line = 7,
                                     .column = 5,
@@ -338,7 +334,7 @@ test "test parsing expressions" {
         ast.Statement{
             .expressionStatement = ast.ExpressionStatement{
                 .token = Token{
-                    .type = TokenType.INT,
+                    .type = .INT,
                     .literal = "5",
                     .line = 8,
                     .column = 1,
@@ -346,16 +342,16 @@ test "test parsing expressions" {
                 .expression = &ast.Expression{
                     .infix = ast.Infix{
                         .token = Token{
-                            .type = TokenType.MINUS,
+                            .type = .MINUS,
                             .literal = "-",
                             .line = 8,
                             .column = 3,
                         },
-                        .operator = ast.InfixOperator.SUBTRACT,
+                        .operator = .SUBTRACT,
                         .left = &ast.Expression{
                             .integer = ast.Integer{
                                 .token = Token{
-                                    .type = TokenType.INT,
+                                    .type = .INT,
                                     .literal = "5",
                                     .line = 8,
                                     .column = 1,
@@ -366,7 +362,7 @@ test "test parsing expressions" {
                         .right = &ast.Expression{
                             .integer = ast.Integer{
                                 .token = Token{
-                                    .type = TokenType.INT,
+                                    .type = .INT,
                                     .literal = "5",
                                     .line = 8,
                                     .column = 5,
@@ -385,10 +381,9 @@ test "test parsing expressions" {
 
     const allocator = arena.allocator();
 
-    var scanner: Scanner = try .init(allocator, Reader.fixed(input));
-    defer scanner.deinit();
+    var scanner: Scanner = .init(input);
 
-    var parser: Parser = try .init(allocator, &scanner);
+    var parser: Parser = .init(allocator, &scanner);
 
     const program: ast.Program = try parser.parseProgram();
 
@@ -409,7 +404,7 @@ test "test if expression" {
         ast.Statement{
             .expressionStatement = ast.ExpressionStatement{
                 .token = Token{
-                    .type = TokenType.IF,
+                    .type = .IF,
                     .literal = "if",
                     .line = 1,
                     .column = 1,
@@ -417,7 +412,7 @@ test "test if expression" {
                 .expression = &ast.Expression{
                     .@"if" = ast.If{
                         .token = Token{
-                            .type = TokenType.IF,
+                            .type = .IF,
                             .literal = "if",
                             .line = 1,
                             .column = 1,
@@ -425,16 +420,16 @@ test "test if expression" {
                         .condition = &ast.Expression{
                             .infix = ast.Infix{
                                 .token = Token{
-                                    .type = TokenType.EQUALS,
+                                    .type = .EQUALS,
                                     .literal = "==",
                                     .line = 1,
                                     .column = 7,
                                 },
-                                .operator = ast.InfixOperator.EQUALS,
+                                .operator = .EQUALS,
                                 .left = &ast.Expression{
                                     .integer = ast.Integer{
                                         .token = Token{
-                                            .type = TokenType.INT,
+                                            .type = .INT,
                                             .literal = "5",
                                             .line = 1,
                                             .column = 5,
@@ -445,7 +440,7 @@ test "test if expression" {
                                 .right = &ast.Expression{
                                     .integer = ast.Integer{
                                         .token = Token{
-                                            .type = TokenType.INT,
+                                            .type = .INT,
                                             .literal = "5",
                                             .line = 1,
                                             .column = 10,
@@ -457,7 +452,7 @@ test "test if expression" {
                         },
                         .consequence = ast.Block{
                             .token = Token{
-                                .type = TokenType.LBRACE,
+                                .type = .LBRACE,
                                 .literal = "{",
                                 .line = 1,
                                 .column = 13,
@@ -466,7 +461,7 @@ test "test if expression" {
                                  ast.Statement{ 
                                      .returnStatement = ast.ReturnStatement{
                                          .token = Token{
-                                            .type = TokenType.RETURN,
+                                            .type = .RETURN,
                                             .literal = "return",
                                             .line = 1,
                                             .column = 15,
@@ -474,7 +469,7 @@ test "test if expression" {
                                         .expression = &ast.Expression{
                                             .integer = ast.Integer{
                                                 .token = Token{
-                                                    .type = TokenType.INT,
+                                                    .type = .INT,
                                                     .literal = "5",
                                                     .line = 1,
                                                     .column = 22,
@@ -494,7 +489,7 @@ test "test if expression" {
         ast.Statement{
             .expressionStatement = ast.ExpressionStatement{
                 .token = Token{
-                    .type = TokenType.IF,
+                    .type = .IF,
                     .literal = "if",
                     .line = 2,
                     .column = 1,
@@ -502,7 +497,7 @@ test "test if expression" {
                 .expression = &ast.Expression{
                     .@"if" = ast.If{
                         .token = Token{
-                            .type = TokenType.IF,
+                            .type = .IF,
                             .literal = "if",
                             .line = 2,
                             .column = 1,
@@ -510,16 +505,16 @@ test "test if expression" {
                         .condition = &ast.Expression{
                             .infix = ast.Infix{
                                 .token = Token{
-                                    .type = TokenType.EQUALS,
+                                    .type = .EQUALS,
                                     .literal = "==",
                                     .line = 2,
                                     .column = 7,
                                 },
-                                .operator = ast.InfixOperator.EQUALS,
+                                .operator = .EQUALS,
                                 .left = &ast.Expression{
                                     .integer = ast.Integer{
                                         .token = Token{
-                                            .type = TokenType.INT,
+                                            .type = .INT,
                                             .literal = "5",
                                             .line = 2,
                                             .column = 5,
@@ -530,7 +525,7 @@ test "test if expression" {
                                 .right = &ast.Expression{
                                     .integer = ast.Integer{
                                         .token = Token{
-                                            .type = TokenType.INT,
+                                            .type = .INT,
                                             .literal = "5",
                                             .line = 2,
                                             .column = 10,
@@ -542,7 +537,7 @@ test "test if expression" {
                         },
                         .consequence = ast.Block{
                             .token = Token{
-                                .type = TokenType.LBRACE,
+                                .type = .LBRACE,
                                 .literal = "{",
                                 .line = 2,
                                 .column = 13,
@@ -551,7 +546,7 @@ test "test if expression" {
                                  ast.Statement{ 
                                      .returnStatement = ast.ReturnStatement{
                                          .token = Token{
-                                            .type = TokenType.RETURN,
+                                            .type = .RETURN,
                                             .literal = "return",
                                             .line = 2,
                                             .column = 15,
@@ -559,7 +554,7 @@ test "test if expression" {
                                         .expression = &ast.Expression{
                                             .integer = ast.Integer{
                                                 .token = Token{
-                                                    .type = TokenType.INT,
+                                                    .type = .INT,
                                                     .literal = "5",
                                                     .line = 2,
                                                     .column = 22,
@@ -573,7 +568,7 @@ test "test if expression" {
                         },
                         .alternative = ast.Block{
                             .token = Token{
-                                .type = TokenType.LBRACE,
+                                .type = .LBRACE,
                                 .literal = "{",
                                 .line = 2,
                                 .column = 32,
@@ -582,7 +577,7 @@ test "test if expression" {
                                  ast.Statement{ 
                                      .returnStatement = ast.ReturnStatement{
                                          .token = Token{
-                                            .type = TokenType.RETURN,
+                                            .type = .RETURN,
                                             .literal = "return",
                                             .line = 2,
                                             .column = 34,
@@ -590,7 +585,7 @@ test "test if expression" {
                                         .expression = &ast.Expression{
                                             .integer = ast.Integer{
                                                 .token = Token{
-                                                    .type = TokenType.INT,
+                                                    .type = .INT,
                                                     .literal = "6",
                                                     .line = 2,
                                                     .column = 41,
@@ -613,10 +608,9 @@ test "test if expression" {
 
     const allocator = arena.allocator();
 
-    var scanner: Scanner = try .init(allocator, Reader.fixed(input));
-    defer scanner.deinit();
+    var scanner: Scanner = .init(input);
 
-    var parser: Parser = try .init(allocator, &scanner);
+    var parser: Parser = .init(allocator, &scanner);
 
     const program: ast.Program = try parser.parseProgram();
 
@@ -639,14 +633,14 @@ test "test parsing function literals" {
         ast.Statement{
             .letStatement = ast.LetStatement{
                 .token = Token{
-                    .type = TokenType.LET,
+                    .type = .LET,
                     .literal = "let",
                     .line = 1,
                     .column = 1
                 },
                 .identifier = ast.Identifier{
                     .token = Token{
-                        .type = TokenType.IDENT,
+                        .type = .IDENT,
                         .literal = "foo",
                         .line = 1,
                         .column = 5
@@ -656,7 +650,7 @@ test "test parsing function literals" {
                 .expression = &ast.Expression{
                     .function = ast.Function{
                         .token = Token{
-                            .type = TokenType.FN,
+                            .type = .FN,
                             .literal = "fn",
                             .line = 1,
                             .column = 11
@@ -664,7 +658,7 @@ test "test parsing function literals" {
                         .arguments = &[_]ast.Identifier{
                             ast.Identifier{
                                 .token = Token{
-                                    .type = TokenType.IDENT,
+                                    .type = .IDENT,
                                     .literal = "a",
                                     .line = 1,
                                     .column = 15
@@ -673,7 +667,7 @@ test "test parsing function literals" {
                             },
                             ast.Identifier{
                                 .token = Token{
-                                    .type = TokenType.IDENT,
+                                    .type = .IDENT,
                                     .literal = "b",
                                     .line = 1,
                                     .column = 18
@@ -683,7 +677,7 @@ test "test parsing function literals" {
                         },
                         .body = ast.Block{
                             .token = Token{
-                                .type = TokenType.LBRACE,
+                                .type = .LBRACE,
                                 .literal = "{",
                                 .line = 1,
                                 .column = 21
@@ -692,7 +686,7 @@ test "test parsing function literals" {
                                 ast.Statement{
                                     .returnStatement = ast.ReturnStatement{
                                         .token = Token{
-                                            .type = TokenType.RETURN,
+                                            .type = .RETURN,
                                             .literal = "return",
                                             .line = 2,
                                             .column = 5
@@ -700,16 +694,16 @@ test "test parsing function literals" {
                                         .expression = &ast.Expression{
                                             .infix = ast.Infix{
                                                 .token = Token{
-                                                    .type = TokenType.PLUS,
+                                                    .type = .PLUS,
                                                     .literal = "+",
                                                     .line = 2,
                                                     .column = 14
                                                 },
-                                                .operator = ast.InfixOperator.ADD,
+                                                .operator = .ADD,
                                                 .left = &ast.Expression{
                                                     .identifier = ast.Identifier{
                                                         .token = Token{
-                                                            .type = TokenType.IDENT,
+                                                            .type = .IDENT,
                                                             .literal = "a",
                                                             .line = 2,
                                                             .column = 12
@@ -720,7 +714,7 @@ test "test parsing function literals" {
                                                 .right = &ast.Expression{
                                                     .identifier = ast.Identifier{
                                                         .token = Token{
-                                                            .type = TokenType.IDENT,
+                                                            .type = .IDENT,
                                                             .literal = "b",
                                                             .line = 2,
                                                             .column = 16
@@ -745,10 +739,9 @@ test "test parsing function literals" {
 
     const allocator = arena.allocator();
 
-    var scanner: Scanner = try .init(allocator, Reader.fixed(input));
-    defer scanner.deinit();
+    var scanner: Scanner = .init(input);
 
-    var parser: Parser = try .init(allocator, &scanner);
+    var parser: Parser = .init(allocator, &scanner);
 
     const program: ast.Program = try parser.parseProgram();
 

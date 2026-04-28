@@ -1,10 +1,9 @@
 const std = @import("std");
-const token_zig = @import("token.zig");
-const scanner_zig = @import("scanner.zig");
+const monkey = @import("root.zig");
 
-const Token = token_zig.Token;
-const TokenType = token_zig.TokenType;
-const Scanner = scanner_zig.Scanner;
+const Token = monkey.token.Token;
+const TokenType = monkey.token.TokenType;
+const Scanner = monkey.scanner.Scanner;
 
 test "test one character tokens" {
     const cases = [_]Token{ Token{
@@ -54,7 +53,7 @@ test "test one character tokens" {
         .column = 4,
     } };
 
-    var scanner = try Scanner.init(
+    var scanner = Scanner.init(
         \\ [ ]{ }  (  )
         \\ ;;
     );
@@ -86,7 +85,7 @@ test "test two character tokens" {
         .column = 5,
     } };
 
-    var scanner = try Scanner.init(
+    var scanner = Scanner.init(
         \\==
         \\  !=
     );
@@ -129,7 +128,7 @@ test "test long tokens" {
         },
     };
 
-    var scanner = try Scanner.init(
+    var scanner = Scanner.init(
         \\joona
         \\  if   true
         \\800
