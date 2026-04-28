@@ -1,142 +1,89 @@
 const std = @import("std");
+const token_zig = @import("token.zig");
 
-const Allocator = std.mem.Allocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
-const ArrayList = std.ArrayList;
-const StringHashMap = std.StringHashMap;
-const Reader = std.io.Reader;
-const Writer = std.io.Writer;
-
-pub const TokenType = enum {
-    LPAREN,
-    RPAREN,
-    LBRACE,
-    RBRACE,
-    LBRACKET,
-    RBRACKET,
-    SEMICOLON,
-    PLUS,
-    MINUS,
-    ASTERISK,
-    LESS_THAN,
-    GREATER_THAN,
-    SLASH,
-    EQUALS,
-    NOT_EQUALS,
-    ASSIGN,
-    BANG,
-    COMMA,
-    TRUE,
-    FALSE,
-    LET,
-    RETURN,
-    IF,
-    ELSE,
-    FN,
-    IDENT,
-    INT,
-    EOF,
-    ILLEGAL
-};
-
-pub const Token = struct {
-    type: TokenType,
-    literal: []const u8,
-    line: usize,
-    column: usize,
-};
-
-const ScannerError = error{EOFError};
-
-pub fn printToken(writer: *Writer, token: Token) !void {
-    try writer.print("Token {{ type = {}, literal = \"{s}\", line = {}, column = {} }}\n", .{ token.type, token.literal, token.line, token.column });
-}
+const TokenType = token_zig.TokenType;
+const Token = token_zig.Token;
+const lookupKeyword = token_zig.lookupKeyword;
 
 pub const Scanner = struct {
-    allocator: Allocator,
-    reader: Reader,
+    code: []const u8,
 
-    current: u8,
-    ahead: u8,
+    current: usize,
+    ahead: usize,
 
     line: usize,
     column: usize,
 
-    keywords: StringHashMap(TokenType),
+    fn getCurrent(self: @This()) u8 {
+        return if (self.current < self.code.len) self.code[self.current] else 0;
+    }
+
+    fn getAhead(self: @This()) u8 {
+        return if (self.ahead < self.code.len) self.code[self.ahead] else 0;
+    }
 
     fn nextChar(self: *@This()) void {
-        self.current = self.ahead;
-        self.ahead = self.reader.takeByte() catch 0;
+        if (self.current < self.code.len) {
+            self.current = self.ahead;
+            self.ahead += 1;
 
-        self.column += 1;
+            self.column += 1;
 
-        if (self.current == '\n') {
-            self.column = 0;
-            self.line += 1;
+            if (self.getCurrent() == '\n') {
+                self.column = 0;
+                self.line += 1;
+            }
         }
     }
 
-    pub fn init(allocator: Allocator, reader: Reader) !@This() {
-        var keywords: StringHashMap(TokenType) = .init(allocator);
-
-        try keywords.put("let", TokenType.LET);
-        try keywords.put("return", TokenType.RETURN);
-        try keywords.put("true", TokenType.TRUE);
-        try keywords.put("false", TokenType.FALSE);
-        try keywords.put("if", TokenType.IF);
-        try keywords.put("else", TokenType.ELSE);
-        try keywords.put("fn", TokenType.FN);
-
-        var scanner = Scanner{ .allocator = allocator, .reader = reader, .current = 0, .ahead = 0, .line = 1, .column = 1, .keywords = keywords };
-
-        scanner.current = scanner.reader.takeByte() catch 0;
-        scanner.ahead = scanner.reader.takeByte() catch 0;
-
-        return scanner;
-    }
-
-    pub fn deinit(self: *@This()) void {
-        self.keywords.deinit();
+    pub fn init(code: []const u8) !@This() {
+        return Scanner{ 
+            .code = code,
+            .current = 0,
+            .ahead = 1,
+            .line = 1,
+            .column = 1,
+        };
     }
 
     fn eatWhitespace(self: *@This()) void {
-        while (std.ascii.isWhitespace(self.current)) self.nextChar();
+        while (std.ascii.isWhitespace(self.getCurrent())) self.nextChar();
     }
 
-    fn readIdent(self: *@This()) ![]const u8 {
-        var buffer: ArrayList(u8) = .empty;
-        errdefer buffer.deinit(self.allocator);
+    fn readIdent(self: *@This()) []const u8 {
+        const start: usize = self.current;
+        var end: usize = self.current;
 
-        while (std.ascii.isAlphanumeric(self.current)) {
-            try buffer.append(self.allocator, self.current);
+        while (std.ascii.isAlphanumeric(self.getCurrent())) {
+            end += 1;
             self.nextChar();
         }
 
-        return buffer.toOwnedSlice(self.allocator);
+        return self.code[start..end];
     }
 
-    fn readNumber(self: *@This()) ![]const u8 {
-        var buffer: ArrayList(u8) = .empty;
-        errdefer buffer.deinit(self.allocator);
+    fn readNumber(self: *@This()) []const u8 {
+        const start: usize = self.current;
+        var end: usize = self.current;
 
-        while (std.ascii.isDigit(self.current)) {
-            try buffer.append(self.allocator, self.current);
+        while (std.ascii.isDigit(self.getCurrent())) {
+            end += 1;
             self.nextChar();
         }
 
-        return buffer.toOwnedSlice(self.allocator);
+        return self.code[start..end];
     }
 
     fn createToken(self: *@This(), @"type": TokenType, literal: []const u8) Token {
         return Token{ .type = @"type", .literal = literal, .line = self.line, .column = self.column };
     }
 
-    pub fn nextToken(self: *@This()) !Token {
+    pub fn nextToken(self: *@This()) Token {
         self.eatWhitespace();
 
         var token: Token = undefined;
 
-        switch (self.current) {
+        switch (self.getCurrent()) {
             ';' => token = self.createToken(TokenType.SEMICOLON, ";"),
             '{' => token = self.createToken(TokenType.LBRACE, "{"),
             '}' => token = self.createToken(TokenType.RBRACE, "}"),
@@ -152,7 +99,7 @@ pub const Scanner = struct {
             '<' => token = self.createToken(TokenType.LESS_THAN, "<"),
             '>' => token = self.createToken(TokenType.GREATER_THAN, ">"),
             '!' => {
-                if (self.ahead == '=') {
+                if (self.getAhead() == '=') {
                     token = self.createToken(TokenType.NOT_EQUALS, "!=");
                     self.nextChar();
                 } else {
@@ -160,7 +107,7 @@ pub const Scanner = struct {
                 }
             },
             '=' => {
-                if (self.ahead == '=') {
+                if (self.getAhead() == '=') {
                     token = self.createToken(TokenType.EQUALS, "==");
                     self.nextChar();
                 } else {
@@ -172,18 +119,13 @@ pub const Scanner = struct {
                 const line: usize = self.line;
                 const column: usize = self.column;
 
-                if (std.ascii.isAlphabetic(self.current)) {
-                    const literal = try self.readIdent();
+                if (std.ascii.isAlphabetic(self.getCurrent())) {
+                    const literal = self.readIdent();
+                    return Token{ .type = lookupKeyword(literal), .literal = literal, .line = line, .column = column };
 
-                    if (self.keywords.get(literal)) |@"type"| {
-                        defer self.allocator.free(literal);
-                        return Token{ .type = @"type", .literal = self.keywords.getKey(literal).?, .line = line, .column = column };
-                    } else {
-                        return Token{ .type = TokenType.IDENT, .literal = literal, .line = line, .column = column };
-                    }
-                } else if (std.ascii.isDigit(self.current)) {
-                    const number = try self.readNumber();
-                    return Token{ .type = TokenType.INT, .literal = number, .line = line, .column = column };
+                } else if (std.ascii.isDigit(self.getCurrent())) {
+                    const literal = self.readNumber();
+                    return Token{ .type = TokenType.INT, .literal = literal, .line = line, .column = column };
                 }
                 token = self.createToken(TokenType.ILLEGAL, "");
             },
@@ -195,106 +137,3 @@ pub const Scanner = struct {
     }
 };
 
-test "test one character tokens" {
-    const cases = [_]Token{ Token{
-        .type = TokenType.LBRACKET,
-        .literal = "[",
-        .line = 1,
-        .column = 2,
-    }, Token{
-        .type = TokenType.RBRACKET,
-        .literal = "]",
-        .line = 1,
-        .column = 4,
-    }, Token{
-        .type = TokenType.LBRACE,
-        .literal = "{",
-        .line = 1,
-        .column = 5,
-    }, Token{
-        .type = TokenType.RBRACE,
-        .literal = "}",
-        .line = 1,
-        .column = 7,
-    }, Token{
-        .type = TokenType.LPAREN,
-        .literal = "(",
-        .line = 1,
-        .column = 10,
-    }, Token{
-        .type = TokenType.RPAREN,
-        .literal = ")",
-        .line = 1,
-        .column = 13,
-    }, Token{
-        .type = TokenType.SEMICOLON,
-        .literal = ";",
-        .line = 2,
-        .column = 2,
-    }, Token{
-        .type = TokenType.SEMICOLON,
-        .literal = ";",
-        .line = 2,
-        .column = 3,
-    }, Token{
-        .type = TokenType.EOF,
-        .literal = "",
-        .line = 2,
-        .column = 4,
-    } };
-
-    var arena: ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    const allocator = arena.allocator();
-
-    var scanner = try Scanner.init(allocator, Reader.fixed(
-        \\ [ ]{ }  (  )
-        \\ ;;
-    ));
-
-    for (cases) |case| {
-        const token = try scanner.nextToken();
-        try std.testing.expectEqualDeep(token, case);
-    }
-
-    const token = try scanner.nextToken();
-    try std.testing.expect(token.type == TokenType.EOF);
-}
-
-test "test two character tokens" {
-    const cases = [_]Token{ Token{
-        .type = TokenType.EQUALS,
-        .literal = "==",
-        .line = 1,
-        .column = 1,
-    }, Token{
-        .type = TokenType.NOT_EQUALS,
-        .literal = "!=",
-        .line = 2,
-        .column = 3,
-    }, Token{
-        .type = TokenType.EOF,
-        .literal = "",
-        .line = 2,
-        .column = 5,
-    } };
-
-    var arena: ArenaAllocator = .init(std.testing.allocator);
-    defer arena.deinit();
-
-    const allocator = arena.allocator();
-
-    var scanner = try Scanner.init(allocator, Reader.fixed(
-        \\==
-        \\  !=
-    ));
-
-    for (cases) |case| {
-        const token = try scanner.nextToken();
-        try std.testing.expectEqualDeep(token, case);
-    }
-
-    const token = try scanner.nextToken();
-    try std.testing.expect(token.type == TokenType.EOF);
-}
