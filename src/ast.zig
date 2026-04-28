@@ -114,7 +114,7 @@ pub const Function = struct {
 
         for (self.arguments, 0..) |argument, index| {
             try args.appendSlice(allocator, argument.name);
-            if (index < self.arguments.len) {
+            if (index < self.arguments.len - 1) {
                 try args.appendSlice(allocator, ", ");
             }
         }
