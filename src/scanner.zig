@@ -7,7 +7,37 @@ const StringHashMap = std.StringHashMap;
 const Reader = std.io.Reader;
 const Writer = std.io.Writer;
 
-pub const TokenType = enum { LPAREN, RPAREN, LBRACE, RBRACE, LBRACKET, RBRACKET, SEMICOLON, PLUS, MINUS, ASTERISK, SLASH, EQUALS, NOT_EQUALS, ASSIGN, BANG, COMMA, TRUE, FALSE, LET, RETURN, FN, IDENT, INT, EOF, ILLEGAL };
+pub const TokenType = enum {
+    LPAREN,
+    RPAREN,
+    LBRACE,
+    RBRACE,
+    LBRACKET,
+    RBRACKET,
+    SEMICOLON,
+    PLUS,
+    MINUS,
+    ASTERISK,
+    LESS_THAN,
+    GREATER_THAN,
+    SLASH,
+    EQUALS,
+    NOT_EQUALS,
+    ASSIGN,
+    BANG,
+    COMMA,
+    TRUE,
+    FALSE,
+    LET,
+    RETURN,
+    IF,
+    ELSE,
+    FN,
+    IDENT,
+    INT,
+    EOF,
+    ILLEGAL
+};
 
 pub const Token = struct {
     type: TokenType,
@@ -53,6 +83,8 @@ pub const Scanner = struct {
         try keywords.put("return", TokenType.RETURN);
         try keywords.put("true", TokenType.TRUE);
         try keywords.put("false", TokenType.FALSE);
+        try keywords.put("if", TokenType.IF);
+        try keywords.put("else", TokenType.ELSE);
         try keywords.put("fn", TokenType.FN);
 
         var scanner = Scanner{ .allocator = allocator, .reader = reader, .current = 0, .ahead = 0, .line = 1, .column = 1, .keywords = keywords };
@@ -117,6 +149,8 @@ pub const Scanner = struct {
             '*' => token = self.createToken(TokenType.ASTERISK, "*"),
             '/' => token = self.createToken(TokenType.SLASH, "/"),
             ',' => token = self.createToken(TokenType.COMMA, ","),
+            '<' => token = self.createToken(TokenType.LESS_THAN, "<"),
+            '>' => token = self.createToken(TokenType.GREATER_THAN, ">"),
             '!' => {
                 if (self.ahead == '=') {
                     token = self.createToken(TokenType.NOT_EQUALS, "!=");

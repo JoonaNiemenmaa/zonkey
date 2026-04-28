@@ -44,9 +44,6 @@ pub fn main() !void {
 
         try parser.printErrors(stdout);
         try program.printProgram(stdout);
-//      for (program.statements) |statement| {
-//          try stdout.print("{}\n", .{statement});
-//      }
         try stdout.flush();
     }
 }
