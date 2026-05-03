@@ -104,6 +104,18 @@ test "test precedence" {
             .@"test" = "!(true == true)",
             .expect = "(!(true == true))",
         },
+        .{
+            .@"test" = "a + add(b * c) + d",
+            .expect = "((a + add((b * c))) + d)",
+        },
+        .{
+            .@"test" = "add(a, b, 1, 2 * 3, 4 + 5, add(6, 7 * 8))",
+            .expect = "add(a, b, 1, (2 * 3), (4 + 5), add(6, (7 * 8)))",
+        },
+        .{
+            .@"test" = "add(a + b + c * d / f + g)",
+            .expect = "add((((a + b) + ((c * d) / f)) + g))",
+        },
     };
 
     for (cases) |case| {
@@ -655,7 +667,7 @@ test "test parsing function literals" {
                             .line = 1,
                             .column = 11
                         },
-                        .arguments = &[_]ast.Identifier{
+                        .parameters = &[_]ast.Identifier{
                             ast.Identifier{
                                 .token = Token{
                                     .type = .IDENT,
@@ -734,6 +746,166 @@ test "test parsing function literals" {
         }
     };
 
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    var scanner: Scanner = .init(input);
+
+    var parser: Parser = .init(allocator, &scanner);
+
+    const program: ast.Program = try parser.parseProgram();
+
+    try std.testing.expectEqual(cases.len, program.statements.len);
+
+    for (program.statements, cases) |statement, case| {
+        try std.testing.expectEqualDeep(case, statement);
+    }
+}
+
+test "test call expressions" {
+
+    const cases = [_]ast.Statement{
+        ast.Statement{
+            .expressionStatement = .{
+                .token = .{
+                    .type = .IDENT,
+                    .literal = "foo",
+                    .line = 1,
+                    .column = 1
+                },
+                .expression = &ast.Expression{
+                    .call = .{
+                        .token = .{
+                            .type = .LPAREN,
+                            .literal = "(",
+                            .line = 1,
+                            .column = 4
+                        },
+                        .function = &ast.Expression{
+                            .identifier = .{
+                                .token = .{
+                                    .type = .IDENT,
+                                    .literal = "foo",
+                                    .line = 1,
+                                    .column = 1
+                                },
+                                .name = "foo"
+                            }
+                        },
+                        .arguments = @as([]*const ast.Expression, &[_]*const ast.Expression{})
+                    }
+                }
+            }    
+        },
+        ast.Statement{
+            .expressionStatement = .{
+                .token = .{
+                    .type = .IDENT,
+                    .literal = "foo",
+                    .line = 2,
+                    .column = 1
+                },
+                .expression = &ast.Expression{
+                    .call = .{
+                        .token = .{
+                            .type = .LPAREN,
+                            .literal = "(",
+                            .line = 2,
+                            .column = 4
+                        },
+                        .function = &ast.Expression{
+                            .identifier = .{
+                                .token = .{
+                                    .type = .IDENT,
+                                    .literal = "foo",
+                                    .line = 2,
+                                    .column = 1
+                                },
+                                .name = "foo"
+                            }
+                        },
+                        .arguments = @constCast(&[_]*const ast.Expression{
+                            &ast.Expression{
+                                .integer = .{
+                                    .token = .{
+                                        .type = .INT,
+                                        .literal = "5",
+                                        .line = 2,
+                                        .column = 5
+                                    },
+                                    .value = 5
+                                }
+                            }
+                        })
+                    }
+                }
+            }    
+        },
+        ast.Statement{
+            .expressionStatement = .{
+                .token = .{
+                    .type = .IDENT,
+                    .literal = "foo",
+                    .line = 3,
+                    .column = 1
+                },
+                .expression = &ast.Expression{
+                    .call = .{
+                        .token = .{
+                            .type = .LPAREN,
+                            .literal = "(",
+                            .line = 3,
+                            .column = 4
+                        },
+                        .function = &ast.Expression{
+                            .identifier = .{
+                                .token = .{
+                                    .type = .IDENT,
+                                    .literal = "foo",
+                                    .line = 3,
+                                    .column = 1
+                                },
+                                .name = "foo"
+                            }
+                        },
+                        .arguments = @constCast(&[_]*const ast.Expression{
+                            &ast.Expression{
+                                .integer = .{
+                                    .token = .{
+                                        .type = .INT,
+                                        .literal = "5",
+                                        .line = 3,
+                                        .column = 5
+                                    },
+                                    .value = 5
+                                }
+                            },
+                            &ast.Expression{
+                                .integer = .{
+                                    .token = .{
+                                        .type = .INT,
+                                        .literal = "10",
+                                        .line = 3,
+                                        .column = 8
+                                    },
+                                    .value = 10
+                                }
+                            } 
+                        })
+                    }
+                }
+            }    
+        }
+    };
+
+    const input = 
+        \\foo()
+        \\foo(5)
+        \\foo(5, 10)
+    ;
+    
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
 

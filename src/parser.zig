@@ -28,6 +28,10 @@ pub const Parser = struct {
         };
     }
 
+    pub fn getErrors(self: *@This()) ![][]const u8 {
+        return try self.errors.toOwnedSlice(self.allocator);
+    }
+
     fn appendError(self: *@This(), comptime format: []const u8, args: anytype) !void {
         const errorMsg = try std.fmt.allocPrint(self.allocator, format, args);
         try self.errors.append(self.allocator, errorMsg);
@@ -51,7 +55,12 @@ pub const Parser = struct {
             self.nextToken();
             return true;
         } else {
-            try self.appendError("Unexpected token of type '{}' found when '{}' was expected.", .{ self.ahead.type, expect });
+            try self.appendError("{}:{} Unexpected token of type '{}' found when '{}' was expected.", .{
+                self.ahead.line,
+                self.ahead.column,
+                self.ahead.type,
+                expect
+            });
             return false;
         }
     }
@@ -89,19 +98,24 @@ pub const Parser = struct {
 
         self.nextToken();
 
-        var arguments: ArrayList(ast.Identifier) = .empty;
-        errdefer arguments.deinit(self.allocator);
+        var parameters: ArrayList(ast.Identifier) = .empty;
+        errdefer parameters.deinit(self.allocator);
     
         while (self.currentTokenIs(.IDENT)) {
             const identifier = self.parseIdentifier();
-            try arguments.append(self.allocator, identifier);
+            try parameters.append(self.allocator, identifier);
 
             self.nextToken();
             if (self.currentTokenIs(.COMMA)) if (!try self.expectAhead(.IDENT)) return null;
         }
 
         if (!self.currentTokenIs(.RPAREN)) {
-            try self.appendError("Unexpected token of type '{}' found when '{}' was expected.", .{ self.ahead.type, TokenType.RPAREN });
+            try self.appendError("{}:{} Unexpected token of type '{}' found when '{}' was expected.", .{
+                self.current.line,
+                self.current.column,
+                self.current.type,
+                TokenType.RPAREN
+            });
             return null;
         }
 
@@ -111,7 +125,7 @@ pub const Parser = struct {
         
         return ast.Function{
             .token = token,
-            .arguments = try arguments.toOwnedSlice(self.allocator),
+            .parameters = try parameters.toOwnedSlice(self.allocator),
             .body = body,
         };
     }
@@ -150,7 +164,7 @@ pub const Parser = struct {
 
         self.nextToken();
 
-        const expression = try self.parseExpression(Precedence.PREFIX) orelse return null;
+        const expression = try self.parseExpression(.PREFIX) orelse return null;
 
         return ast.Prefix{
             .token = token,
@@ -159,24 +173,61 @@ pub const Parser = struct {
         };
     }
 
-    fn parseInfix(self: *@This(), operator: ast.InfixOperator, left: *ast.Expression) Allocator.Error!?ast.Infix {
+    fn parseCall(self: *@This(), function: *ast.Expression) Allocator.Error!?ast.Expression {
         const token = self.current;
+
+        var arguments: ArrayList(*const ast.Expression) = .empty;
+        errdefer arguments.deinit(self.allocator);
+
+        if (!self.aheadTokenIs(.RPAREN)) {
+            self.nextToken();
+
+            var argument = try self.parseExpression(.LOWEST) orelse return null;
+            try arguments.append(self.allocator, argument);
+
+            while (self.aheadTokenIs(.COMMA)) {
+                self.nextToken();
+                self.nextToken();
+                argument = try self.parseExpression(.LOWEST) orelse return null;
+                try arguments.append(self.allocator, argument);
+            }
+        }
+
+        if (!try self.expectAhead(.RPAREN)) return null;
+
+        return ast.Expression{
+          .call = .{
+              .token = token,
+              .function = function,
+              .arguments = try arguments.toOwnedSlice(self.allocator),
+          }
+        };
+    }
+
+    fn parseInfix(self: *@This(), left: *ast.Expression) Allocator.Error!?ast.Expression {
+        const token = self.current;
+
+        const operator = monkey.ast.getInfixOperator(token.type);
 
         self.nextToken();
 
         const right = try self.parseExpression(getPrecedence(token.type)) orelse return null;
 
-        return ast.Infix{
-            .token = token,
-            .operator = operator,
-            .left = left,
-            .right = right,
+        return ast.Expression{ 
+            .infix = .{
+                .token = token,
+                .operator = operator,
+                .left = left,
+                .right = right,
+            }
         };
     }
 
-    fn parseGroupedExpression(self: *@This()) !?*ast.Expression { self.nextToken();
+    fn parseGroupedExpression(self: *@This()) !?*ast.Expression {
 
-        const expression = try self.parseExpression(Precedence.LOWEST) orelse return null;
+        self.nextToken();
+
+        const expression = try self.parseExpression(.LOWEST) orelse return null;
 
         if (!try self.expectAhead(TokenType.RPAREN)) return null;
 
@@ -195,15 +246,31 @@ pub const Parser = struct {
 
     fn getPrecedence(@"type": TokenType) Precedence {
         return switch (@"type") {
-            .EQUALS => Precedence.EQUALS,
-            .NOT_EQUALS => Precedence.EQUALS,
-            .LESS_THAN => Precedence.LESSGREATER,
-            .GREATER_THAN => Precedence.LESSGREATER,
             .PLUS => Precedence.SUM,
             .MINUS => Precedence.SUM,
             .ASTERISK => Precedence.PRODUCT,
             .SLASH => Precedence.PRODUCT,
+            .EQUALS => Precedence.EQUALS,
+            .NOT_EQUALS => Precedence.EQUALS,
+            .LESS_THAN => Precedence.LESSGREATER,
+            .GREATER_THAN => Precedence.LESSGREATER,
+            .LPAREN => Precedence.CALL,
             else => Precedence.LOWEST,
+        };
+    }
+
+    fn getInfixFunction(tokenType: TokenType) *const fn (*@This(), *ast.Expression) Allocator.Error!?ast.Expression {
+        return switch (tokenType) {
+            .PLUS => &parseInfix,   
+            .MINUS => &parseInfix,
+            .ASTERISK => &parseInfix,
+            .SLASH => &parseInfix,
+            .EQUALS => &parseInfix,
+            .NOT_EQUALS => &parseInfix,
+            .LESS_THAN => &parseInfix,
+            .GREATER_THAN => &parseInfix,
+            .LPAREN => &parseCall,
+            else => unreachable,
         };
     }
 
@@ -222,7 +289,11 @@ pub const Parser = struct {
             .IF => ast.Expression{ .@"if" = try self.parseIf() orelse return null },
             .FN => ast.Expression{ .function = try self.parseFunction() orelse return null },
             else => {
-                try self.appendError("Unexpected token of type '{}' found when expression was expected.", .{self.current.type});
+                try self.appendError("{}:{} Unexpected token of type '{}' found when expression was expected.", .{
+                    self.current.line,
+                    self.current.column,
+                    self.current.type
+                });
                 return null;
             },
         };
@@ -230,27 +301,20 @@ pub const Parser = struct {
         while (!self.aheadTokenIs(TokenType.SEMICOLON) and
             !self.aheadTokenIs(TokenType.EOF) and
             !self.aheadTokenIs(TokenType.RPAREN) and
+            !self.aheadTokenIs(TokenType.COMMA) and
             @intFromEnum(precedence) < @intFromEnum(getPrecedence(self.ahead.type)))
         {
             self.nextToken();
             const infix = try self.allocator.create(ast.Expression);
             errdefer self.allocator.destroy(infix);
 
-            infix.* = ast.Expression{
-                .infix = switch (self.current.type) {
-                    .PLUS => try self.parseInfix(ast.InfixOperator.ADD, left) orelse return null,
-                    .MINUS => try self.parseInfix(ast.InfixOperator.SUBTRACT, left) orelse return null,
-                    .ASTERISK => try self.parseInfix(ast.InfixOperator.MULTIPLY, left) orelse return null,
-                    .SLASH => try self.parseInfix(ast.InfixOperator.DIVIDE, left) orelse return null,
-                    .LESS_THAN => try self.parseInfix(ast.InfixOperator.LESS_THAN, left) orelse return null,
-                    .GREATER_THAN => try self.parseInfix(ast.InfixOperator.GREATER_THAN, left) orelse return null,
-                    .EQUALS => try self.parseInfix(ast.InfixOperator.EQUALS, left) orelse return null,
-                    .NOT_EQUALS => try self.parseInfix(ast.InfixOperator.NOT_EQUALS, left) orelse return null,
-                    else => unreachable,
-                },
+            infix.* = try getInfixFunction(self.current.type)(self, left) orelse {
+                self.allocator.destroy(infix);
+                return left;
             };
 
             left = infix;
+
         }
 
         return left;
@@ -269,7 +333,7 @@ pub const Parser = struct {
 
         const expression = try self.parseExpression(Precedence.LOWEST) orelse return null;
 
-        if (!try self.expectAhead(TokenType.SEMICOLON)) return null;
+        if (self.aheadTokenIs(TokenType.SEMICOLON)) self.nextToken();
 
         return ast.LetStatement{
             .token = token,
@@ -285,7 +349,7 @@ pub const Parser = struct {
 
         const expression = try self.parseExpression(Precedence.LOWEST) orelse return null;
 
-        if (!try self.expectAhead(TokenType.SEMICOLON)) return null;
+        if (self.aheadTokenIs(TokenType.SEMICOLON)) self.nextToken();
 
         return ast.ReturnStatement{
             .token = token,
@@ -297,9 +361,7 @@ pub const Parser = struct {
         const token = self.current;
         const expression = try self.parseExpression(Precedence.LOWEST) orelse return null;
 
-        if (self.aheadTokenIs(TokenType.SEMICOLON)) {
-            self.nextToken();
-        }
+        if (self.aheadTokenIs(TokenType.SEMICOLON)) self.nextToken();
 
         return ast.ExpressionStatement{
             .token = token,

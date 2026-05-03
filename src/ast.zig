@@ -1,6 +1,7 @@
 const std = @import("std");
 const monkey = @import("root.zig");
 
+const TokenType = monkey.token.TokenType;
 const Writer = std.Io.Writer;
 const ArrayList = std.ArrayList;
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -8,6 +9,12 @@ const DebugAllocator = std.heap.DebugAllocator;
 const Allocator = std.mem.Allocator;
 
 const Token = monkey.token.Token;
+
+pub const Node = union(enum) {
+    program: Program,
+    statement: Statement,
+    expression: Expression,
+};
 
 pub const Program = struct {
     statements: []Statement,
@@ -48,6 +55,7 @@ pub const Expression = union(enum) {
     infix: Infix,
     @"if": If,
     function: Function,
+    call: Call,
 
     pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
         return switch (self) {
@@ -61,16 +69,38 @@ pub const PrefixOperator = enum {
     MINUS,
 };
 
+pub fn getPrefixOperator(@"type": TokenType) PrefixOperator {
+    return switch (@"type") {
+        .BANG => .NOT,
+        .MINUS => .MINUS,
+        else => unreachable
+    };
+}
+
 pub const InfixOperator = enum {
-    EQUALS,
-    NOT_EQUALS,
-    LESS_THAN,
-    GREATER_THAN,
     ADD,
     SUBTRACT,
     MULTIPLY,
     DIVIDE,
+    EQUALS,
+    NOT_EQUALS,
+    LESS_THAN,
+    GREATER_THAN,
 };
+
+pub fn getInfixOperator(@"type": TokenType) InfixOperator {
+    return switch (@"type") {
+        .PLUS => .ADD,
+        .MINUS => .SUBTRACT,
+        .ASTERISK => .MULTIPLY,
+        .SLASH => .DIVIDE,
+        .EQUALS => .EQUALS,
+        .NOT_EQUALS => .NOT_EQUALS,
+        .LESS_THAN => .LESS_THAN,
+        .GREATER_THAN => .GREATER_THAN,
+        else => unreachable
+    };
+}
 
 pub const Boolean = struct {
     token: Token,
@@ -104,24 +134,47 @@ pub const Integer = struct {
 
 pub const Function = struct {
     token: Token,
-    arguments: []const Identifier,
+    parameters: []const Identifier,
     body: Block,
 
     pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
 
+        var params: ArrayList(u8) = .empty;
+        errdefer params.deinit(allocator);
+
+        for (self.parameters, 0..) |parameter, index| {
+            try params.appendSlice(allocator, parameter.name);
+            if (index < self.parameters.len - 1) {
+                try params.appendSlice(allocator, ", ");
+            }
+        }
+
+        return try std.fmt.allocPrint(allocator, "fn ({s}) {s}", .{
+            try params.toOwnedSlice(allocator),
+            try self.body.string(allocator)
+        });
+    }
+};
+
+pub const Call = struct {
+    token: Token,
+    function: *const Expression,
+    arguments: []*const Expression,
+
+    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
         var args: ArrayList(u8) = .empty;
         errdefer args.deinit(allocator);
 
         for (self.arguments, 0..) |argument, index| {
-            try args.appendSlice(allocator, argument.name);
+            try args.appendSlice(allocator, try argument.string(allocator));
             if (index < self.arguments.len - 1) {
                 try args.appendSlice(allocator, ", ");
             }
         }
 
-        return try std.fmt.allocPrint(allocator, "fn ({s}) {s}", .{
+        return try std.fmt.allocPrint(allocator, "{s}({s})", .{
+            try self.function.string(allocator),
             try args.toOwnedSlice(allocator),
-            try self.body.string(allocator)
         });
     }
 };
