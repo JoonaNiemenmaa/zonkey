@@ -2,9 +2,10 @@ const std = @import("std");
 const monkey = @import("root.zig");
 
 const DebugAllocator = std.heap.DebugAllocator;
-const ArenaAllocator = std.heap.ArenaAllocator;
-const Reader = std.io.Reader;
-const Writer = std.io.Writer;
+const ArenaAllocator = std.heap.ArenaAllocator; const Reader = std.Io.Reader;
+const Writer = std.Io.Writer;
+const File = std.Io.File;
+const Io = std.Io;
 
 const Scanner = monkey.scanner.Scanner;
 const Parser = monkey.parser.Parser;
@@ -34,13 +35,14 @@ fn printParserErrors(writer: *Writer, errors: [][]const u8) !void {
     for (errors) |@"error"| try writer.print("    {s}\n", .{ @"error" }); 
 }
 
-pub fn startRepl() !void {
+pub fn startRepl(io: Io) !void {
+
     var stdoutBuf: [BUFFER_SIZE]u8 = undefined;
-    var stdoutWriter = std.fs.File.stdout().writer(&stdoutBuf);
+    var stdoutWriter = File.stdout().writer(io, &stdoutBuf);
     const stdout: *Writer = &stdoutWriter.interface;
 
     var stdinBuf: [BUFFER_SIZE]u8 = undefined;
-    var stdinReader = std.fs.File.stdin().reader(&stdinBuf);
+    var stdinReader = File.stdin().reader(io, &stdinBuf);
     const stdin: *Reader = &stdinReader.interface;
 
     try stdout.print("Hello user! This is the Monkey programming language!\n", .{});
@@ -76,10 +78,8 @@ pub fn startRepl() !void {
             const result = try evaluator.evaluateProgram(program);
 
             try result.print(stdout);
-            switch (result.*) {
-                .integer => gpa.destroy(result),
-                else => {},
-            }
+
+            evaluator.destroyObject(result);
         } else {
             try printParserErrors(stdout, errors);
         }

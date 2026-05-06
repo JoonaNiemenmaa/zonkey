@@ -1,6 +1,8 @@
 const std = @import("std");
 const monkey = @import("root.zig");
 
-pub fn main() !void {
-    try monkey.repl.startRepl();
+const Init = std.process.Init;
+
+pub fn main(init: Init) !void {
+    try monkey.repl.startRepl(init.io);
 }

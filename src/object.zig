@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Writer = std.io.Writer;
+const Writer = std.Io.Writer;
 
 pub const ObjectType = enum{
     INT,
@@ -18,7 +18,7 @@ pub const Object = union(enum){
         switch (self) {
             .integer => |integer| try writer.print("{}\n", .{ integer.value }),
             .boolean => |boolean| try writer.print("{}\n", .{ boolean.value }),
-            .@"null" => |_| try writer.print("null\n", .{}),
+            .@"null" => try writer.print("null\n", .{}),
             .@"return" => |@"return"| try @"return".value.print(writer),
         }
     }

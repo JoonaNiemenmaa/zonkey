@@ -28,7 +28,7 @@ pub const Evaluator = struct{
         };
     }
 
-    fn destroyObject(self: @This(), obj: *Object) void {
+    pub fn destroyObject(self: @This(), obj: *Object) void {
         switch (obj.*) {
             .integer => self.gpa.destroy(obj),
             else => {}
@@ -137,7 +137,7 @@ pub const Evaluator = struct{
         defer self.destroyObject(operand);
         return switch (operand.*) {
             .boolean => |boolean| @constCast(if (boolean.value) &FALSE else &TRUE),
-            .@"null" => |_| @constCast(&TRUE),
+            .@"null" => @constCast(&TRUE),
             .integer => |integer| integerBlock: {
                 break :integerBlock @constCast(if (integer.value != 0) &FALSE else &TRUE);
             },
