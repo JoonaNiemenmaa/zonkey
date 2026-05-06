@@ -12,35 +12,29 @@ pub const Object = union(enum){
     integer: Integer,
     boolean: Boolean,
     @"null": Null,
+    @"return": Return,
 
     pub fn print(self: @This(), writer: *Writer) !void {
         switch (self) {
             .integer => |integer| try writer.print("{}\n", .{ integer.value }),
             .boolean => |boolean| try writer.print("{}\n", .{ boolean.value }),
             .@"null" => |_| try writer.print("null\n", .{}),
+            .@"return" => |@"return"| try @"return".value.print(writer),
         }
     }
 };
 
+pub const Return = struct{
+    value: *Object
+};
+
 pub const Integer = struct{
     value: i64,
-
-    pub fn getType() ObjectType {
-        return .INT;
-    }
 };
 
 
 pub const Boolean = struct{
     value: bool,
-
-    pub fn getType() ObjectType {
-        return .BOOL;
-    }
 };
 
-pub const Null = struct{
-    pub fn getType() ObjectType {
-        return .NULL;
-    }
-};
+pub const Null = struct{};

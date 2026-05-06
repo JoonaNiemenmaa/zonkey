@@ -52,8 +52,10 @@ pub fn startRepl() !void {
     const gpa = debugAllocator.allocator();
 
     while (true) {
-        var arena: ArenaAllocator = .init(gpa);
-        defer arena.deinit();
+        var arenaAllocator: ArenaAllocator = .init(gpa);
+        defer arenaAllocator.deinit();
+
+        const arena = arenaAllocator.allocator();
 
         try stdout.print(">> ", .{});
         try stdout.flush();
@@ -62,21 +64,21 @@ pub fn startRepl() !void {
 
         var scanner: Scanner = .init(input);
 
-        var parser: Parser = .init(arena.allocator(), &scanner);
+        var parser: Parser = .init(arena, &scanner);
 
         const program = try parser.parseProgram();
 
-        const errors = try parser.errors.toOwnedSlice(arena.allocator());
+        const errors = try parser.errors.toOwnedSlice(arena);
 
         if (errors.len == 0) {
             const evaluator: Evaluator = .init(gpa);
 
-            if (try evaluator.evaluateProgram(program)) |result| {
-                try result.print(stdout);
-                switch (result.*) {
-                    .integer => gpa.destroy(result),
-                    else => {},
-                }
+            const result = try evaluator.evaluateProgram(program);
+
+            try result.print(stdout);
+            switch (result.*) {
+                .integer => gpa.destroy(result),
+                else => {},
             }
         } else {
             try printParserErrors(stdout, errors);
