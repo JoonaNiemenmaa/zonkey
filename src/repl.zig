@@ -10,6 +10,7 @@ const Io = std.Io;
 const Scanner = monkey.scanner.Scanner;
 const Parser = monkey.parser.Parser;
 const Evaluator = monkey.evaluate.Evaluator;
+const Environment = monkey.object.Environment;
 
 const BUFFER_SIZE = 256;
 
@@ -35,7 +36,15 @@ fn printParserErrors(writer: *Writer, errors: [][]const u8) !void {
     for (errors) |@"error"| try writer.print("    {s}\n", .{ @"error" }); 
 }
 
-pub fn startRepl(io: Io) !void {
+pub fn startRepl() !void {
+
+    var debugAllocator: DebugAllocator(.{}) = .init;
+    defer std.debug.print("{}\n", .{ debugAllocator.deinit() });
+
+    const gpa = debugAllocator.allocator();
+
+    var threaded: std.Io.Threaded = .init(gpa, .{});
+    const io = threaded.io();
 
     var stdoutBuf: [BUFFER_SIZE]u8 = undefined;
     var stdoutWriter = File.stdout().writer(io, &stdoutBuf);
@@ -48,16 +57,19 @@ pub fn startRepl(io: Io) !void {
     try stdout.print("Hello user! This is the Monkey programming language!\n", .{});
     try stdout.print("Feel free to type in commands\n", .{});
 
-    var debugAllocator: DebugAllocator(.{}) = .init;
-    defer std.debug.print("{}\n", .{ debugAllocator.deinit() });
+    var envArena: ArenaAllocator = .init(gpa);
+    defer envArena.deinit();
 
-    const gpa = debugAllocator.allocator();
+    var env: Environment = .init(envArena.allocator());
+    defer env.deinit();
+
+    const evaluator: Evaluator = .init(gpa);
 
     while (true) {
-        var arenaAllocator: ArenaAllocator = .init(gpa);
-        defer arenaAllocator.deinit();
+        var parserArena: ArenaAllocator = .init(gpa);
+        defer parserArena.deinit();
 
-        const arena = arenaAllocator.allocator();
+        const arena = parserArena.allocator();
 
         try stdout.print(">> ", .{});
         try stdout.flush();
@@ -73,12 +85,8 @@ pub fn startRepl(io: Io) !void {
         const errors = try parser.errors.toOwnedSlice(arena);
 
         if (errors.len == 0) {
-            const evaluator: Evaluator = .init(gpa);
-
-            const result = try evaluator.evaluateProgram(program);
-
+            const result = try evaluator.evaluateProgram(program, &env);
             try result.print(stdout);
-
             evaluator.destroyObject(result);
         } else {
             try printParserErrors(stdout, errors);

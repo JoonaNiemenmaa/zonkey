@@ -5,17 +5,18 @@ const ast = monkey.ast;
 const object = monkey.object;
 
 const Object = object.Object;
+const Environment = object.Environment;
 const Allocator = std.mem.Allocator;
 
-const TRUE = Object{
+pub const TRUE = Object{
     .boolean = object.Boolean{ .value = true }
 };
 
-const FALSE = Object{
+pub const FALSE = Object{
     .boolean = object.Boolean{ .value = false }
 };
 
-const NULL = Object{
+pub const NULL = Object{
     .@"null" = object.Null{}
 };
 
@@ -31,8 +32,28 @@ pub const Evaluator = struct{
     pub fn destroyObject(self: @This(), obj: *Object) void {
         switch (obj.*) {
             .integer => self.gpa.destroy(obj),
+            .@"error" => |@"error"| {
+                self.gpa.free(@"error".message);
+                self.gpa.destroy(obj);
+            },
+            .@"return" => |@"return"| {
+                self.destroyObject(@"return".value);
+                self.gpa.destroy(obj);
+            },
             else => {}
         }
+    }
+
+    fn newError(self: @This(), line: usize, column: usize, comptime format: []const u8, args: anytype) !*Object {
+         const @"error" = try self.gpa.create(Object);
+         @"error".* = Object{
+            .@"error" = object.Error{
+                .line = line,
+                .column = column,
+                .message = try std.fmt.allocPrint(self.gpa, format, args),
+            }
+         };
+         return @"error";
     }
 
     fn getNull() *Object {
@@ -53,112 +74,132 @@ pub const Evaluator = struct{
         return integer;
     }
 
-    pub fn evaluateProgram(self: @This(), program: ast.Program) !*Object {
+    pub fn evaluateProgram(self: @This(), program: ast.Program, env: *Environment) !*Object {
         var result: *Object = @constCast(&NULL);
         for (program.statements, 0..) |statement, i| {
-            result = try self.evaluateStatement(statement);
+            result = try self.evaluateStatement(statement, env);
 
             switch (result.*) {
                 .@"return" => |@"return"| {
                     defer self.gpa.destroy(result);
                     return @"return".value;
                 },
+                .@"error" => return result,
                 else => if (i < program.statements.len - 1) self.destroyObject(result)
             }
         }
         return result;
     }
 
-    fn evaluateStatement(self: @This(), statement: ast.Statement) Allocator.Error!*Object {
+    fn evaluateStatement(self: @This(), statement: ast.Statement, env: *Environment) Allocator.Error!*Object {
         return switch (statement) {
-            .expressionStatement => |expressionStatement| try self.evaluateExpression(expressionStatement.expression.*),
-            .returnStatement => |returnStatement| try self.evaluateReturn(returnStatement),
-            .blockStatement => |block| try self.evaluateBlock(block),
+            .expressionStatement => |expressionStatement| try self.evaluateExpression(expressionStatement.expression.*, env),
+            .returnStatement => |returnStatement| try self.evaluateReturn(returnStatement, env),
+            .letStatement => |letStatement| try self.evaluateLet(letStatement, env),
+            //.blockStatement => |block| try self.evaluateBlock(block, env),
             else => unreachable,
         };
     }
 
-    fn evaluateBlock(self: @This(), block: ast.Block) !*Object {
+    fn evaluateBlock(self: @This(), block: ast.Block, env: *Environment) !*Object {
         var result: *Object = @constCast(&NULL);
         for (block.statements, 0..) |statement, i| {
-            result = try self.evaluateStatement(statement);
+            result = try self.evaluateStatement(statement, env);
 
-            if (result.* == .@"return") return result;
+            if (result.* == .@"return" or result.* == .@"error") return result;
 
             if (i < block.statements.len - 1) self.destroyObject(result);
         }
         return result;
     }
 
-    fn evaluateReturn(self: @This(), statement: ast.ReturnStatement) !*Object {
+    fn evaluateReturn(self: @This(), statement: ast.ReturnStatement, env: *Environment) !*Object {
         const result = try self.gpa.create(Object);
         result.* = Object{
             .@"return" = object.Return{
-                .value = try self.evaluateExpression(statement.expression.*)
+                .value = try self.evaluateExpression(statement.expression.*, env)
             }
         };
         return result;
     }
 
-    fn evaluateExpression(self: @This(), expression: ast.Expression) Allocator.Error!*Object {
+    fn evaluateLet(self: @This(), statement: ast.LetStatement, env: *Environment) !*Object {
+        const result = try self.evaluateExpression(statement.expression.*, env);
+        if (result.* == .@"error") return result;
+        try env.put(statement.identifier.name, result);
+        return result;
+    }
+
+    fn evaluateExpression(self: @This(), expression: ast.Expression, env: *Environment) Allocator.Error!*Object {
         return switch (expression) {
+            .identifier => |identifier| self.evaluateIdentifier(identifier, env),
             .integer => |integer| self.evaluateInteger(integer),
             .boolean => |boolean| evaluateBoolean(boolean),
-            .prefix => |prefix| try self.evaluatePrefix(prefix),
-            .infix => |infix| try self.evaluateInfix(infix),
-            .@"if" => |@"if"| try self.evaluateIf(@"if"),
+            .prefix => |prefix| try self.evaluatePrefix(prefix, env),
+            .infix => |infix| try self.evaluateInfix(infix, env),
+            .@"if" => |@"if"| try self.evaluateIf(@"if", env),
             else => unreachable,
         };
     }
 
-    fn evaluateIf(self: @This(), @"if": ast.If) !*Object {
-        const condition = try self.evaluateExpression(@constCast(@"if".condition).*);
+    fn evaluateIf(self: @This(), @"if": ast.If, env: *Environment) !*Object {
+        const condition = try self.evaluateExpression(@constCast(@"if".condition).*, env);
+
+        if (condition.* == .@"error") return condition;
 
         defer self.destroyObject(condition);
         
         if (condition != &NULL and condition != &FALSE) {
-            return self.evaluateBlock(@"if".consequence);                
+            return self.evaluateBlock(@"if".consequence, env);                
         } else {
-            return if (@"if".alternative) |alternative| try self.evaluateBlock(alternative) else getNull();
+            return if (@"if".alternative) |alternative| try self.evaluateBlock(alternative, env) else getNull();
         }
 
     }
 
-    fn evaluatePrefix(self: @This(), prefix: ast.Prefix) !*Object {
-        const operand = try self.evaluateExpression(prefix.operand.*);
+    fn evaluatePrefix(self: @This(), prefix: ast.Prefix, env: *Environment) !*Object {
+        const operand = try self.evaluateExpression(prefix.operand.*, env);
 
         return switch (prefix.operator) {
-            .NOT => self.evaluatePrefixBang(operand),
-            .MINUS => evaluatePrefixMinus(operand),
+            .NOT => self.evaluatePrefixBang(prefix.token, operand),
+            .MINUS => self.evaluatePrefixMinus(prefix.token, operand),
         };
     }
 
-    fn evaluatePrefixBang(self: @This(), operand: *Object) !*Object {
+    fn evaluatePrefixBang(self: @This(), token: monkey.token.Token, operand: *Object) !*Object {
         defer self.destroyObject(operand);
         return switch (operand.*) {
-            .boolean => |boolean| @constCast(if (boolean.value) &FALSE else &TRUE),
-            .@"null" => @constCast(&TRUE),
-            .integer => |integer| integerBlock: {
-                break :integerBlock @constCast(if (integer.value != 0) &FALSE else &TRUE);
-            },
-            else => unreachable
+            .boolean => |boolean| toBooleanObject(!boolean.value),
+            .@"null" => toBooleanObject(true),
+            .integer => |integer| toBooleanObject(integer.value == 0),
+            else => self.newError(
+                token.line,
+                token.column,
+                "unknown operator: {s}{s}",
+                .{ token.literal, @tagName(operand.*) }
+            )
         };
     }
 
-    fn evaluatePrefixMinus(operand: *Object) !*Object {
+    fn evaluatePrefixMinus(self: @This(), token: monkey.token.Token, operand: *Object) !*Object {
         return switch (operand.*) {
             .integer => |integer| integerBlock: {
                 operand.integer.value = -integer.value;
                 break :integerBlock operand;
             },
-            else => @constCast(&NULL),
+            else => self.newError(
+                token.line,
+                token.column,
+                "unknown operator: {s}{s}",
+                .{ token.literal, @tagName(operand.*) }
+            )
         };
     }
 
-    fn evaluateInfix(self: @This(), infix: ast.Infix) !*Object {
+    fn evaluateInfix(self: @This(), infix: ast.Infix, env: *Environment) !*Object {
 
-        const left = try self.evaluateExpression(@constCast(infix.left).*);
-        const right = try self.evaluateExpression(@constCast(infix.right).*);
+        const left = try self.evaluateExpression(@constCast(infix.left).*, env);
+        const right = try self.evaluateExpression(@constCast(infix.right).*, env);
 
         defer {
             self.destroyObject(left);
@@ -167,25 +208,32 @@ pub const Evaluator = struct{
 
         if (left.* == .integer and right.* == .integer) {
             return self.evaluateIntegerInfix(left, infix.operator, right);
-        } else {
+        } else if (left.* == .boolean and right.* == .boolean) {
             return switch (infix.operator) {
                 .EQUALS => toBooleanObject(left == right),
                 .NOT_EQUALS => toBooleanObject(left != right),
-                else => getNull()
+                else => self.newError(infix.token.line, infix.token.column, "unknown operator: {s} {s} {s}", .{ @tagName(left.*), infix.token.literal, @tagName(right.*) })
             };
         }
+
+        return self.newError(
+            infix.token.line,
+            infix.token.column,
+            "type mismatch: {s} {s} {s}",
+            .{ @tagName(left.*), infix.token.literal, @tagName(right.*) }
+        );
     }
 
     fn evaluateIntegerInfix(self: @This(), left: *Object, operator: ast.InfixOperator, right: *Object) !*Object {
 
         const leftInteger = switch (left.*) {
             .integer => |integer| integer,
-            else => return getNull()
+            else => unreachable
         };
 
         const rightInteger = switch (right.*) {
             .integer => |integer| integer,
-            else => return getNull()
+            else => unreachable
         };
 
         const result = switch (operator) {
@@ -201,6 +249,15 @@ pub const Evaluator = struct{
         };
 
         return result;
+    }
+
+    fn evaluateIdentifier(self: @This(), identifier: ast.Identifier, env: *Environment) !*Object {
+        return if (try env.get(self.gpa, identifier.name)) |value| value else try self.newError(
+                identifier.token.line,
+                identifier.token.column,
+                "identifier not found: {s}",
+                .{ identifier.name }
+            );
     }
 
     fn evaluateInteger(self: @This(), integer: ast.Integer) !*Object {
