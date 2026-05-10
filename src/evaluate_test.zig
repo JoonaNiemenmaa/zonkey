@@ -4,6 +4,7 @@ const monkey = @import("root.zig");
 const evaluate = monkey.evaluate;
 const object = monkey.object;
 const testing = std.testing;
+const ast = monkey.ast;
 
 const Scanner = monkey.scanner.Scanner;
 const Parser = monkey.parser.Parser;
@@ -279,6 +280,141 @@ test "test let statements" {
         .{ .@"test" = "let a = 5 * 5; a;", .expect = 25},
         .{ .@"test" = "let a = 5; let b = a; b;", .expect = 5},
         .{ .@"test" = "let a = 5; let b = a; let c = a + b + 5; c;", .expect = 15},
+    };
+
+    for (cases) |case| {
+        var arena: ArenaAllocator = .init(testing.allocator);
+        defer arena.deinit();
+
+        var scanner: Scanner = .init(case.@"test");
+
+        var parser: Parser = .init(arena.allocator(), &scanner);
+
+        const program = try parser.parseProgram();
+        
+        const evaluator: Evaluator = .init(testing.allocator);
+
+        var envArena: ArenaAllocator = .init(testing.allocator);
+        var env: Environment = .init(envArena.allocator());
+        defer {
+            envArena.deinit();
+            env.deinit();
+        }
+        const result = try evaluator.evaluateProgram(program, &env);
+        defer evaluator.destroyObject(result);
+
+        switch (result.*) {
+            .integer => |integer| try testing.expectEqual(case.expect, integer.value),
+            else => try testing.expect(false),
+        }
+    }
+}
+
+test "test function literals" {
+    const input = "fn (x) { x + 2; }";
+
+    var parserArena: ArenaAllocator = .init(testing.allocator);
+    defer parserArena.deinit();
+
+    var scanner: Scanner = .init(input);
+
+    var parser: Parser = .init(parserArena.allocator(), &scanner);
+
+    const program = try parser.parseProgram();
+    
+    const evaluator: Evaluator = .init(testing.allocator);
+
+    var envArena: ArenaAllocator = .init(testing.allocator);
+    var env: Environment = .init(envArena.allocator());
+    defer {
+        envArena.deinit();
+        env.deinit();
+    }
+
+    const expected = Object{
+        .function = .{
+            .body = .{
+                .token = .{
+                    .type = .LBRACE,
+                    .line = 1,
+                    .column = 8,
+                    .literal = "{",
+                },
+                .statements = &[_]ast.Statement {
+                    ast.Statement {
+                        .expressionStatement = .{
+                            .token = .{
+                                .type = .IDENT,
+                                .line = 1,
+                                .column = 10,
+                                .literal = "x",
+                            },
+                            .expression = &ast.Expression {
+                                .infix = .{
+                                    .token = .{
+                                        .type = .PLUS,
+                                        .line = 1,
+                                        .column = 12,
+                                        .literal = "+",
+                                    },
+                                    .operator = .ADD,
+                                    .left = &ast.Expression {
+                                        .identifier = .{
+                                            .token = .{
+                                                .type = .IDENT,
+                                                .line = 1,
+                                                .column = 10,
+                                                .literal = "x",
+                                            },
+                                            .name = "x",
+                                        },
+                                    },
+                                    .right = &ast.Expression {
+                                        .integer = .{
+                                            .token = .{
+                                                .type = .INT,
+                                                .line = 1,
+                                                .column = 14,
+                                                .literal = "2",
+                                            },
+                                            .value = 2,
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            .parameters = &[_]ast.Identifier{
+                ast.Identifier {
+                    .token = .{
+                        .type = .IDENT,
+                        .line = 1,
+                        .column = 5,
+                        .literal = "x",
+                    },
+                    .name = "x",
+                },
+            },
+            .env = &env,
+        },
+    };
+
+    const result = try evaluator.evaluateProgram(program, &env);
+    defer evaluator.destroyObject(result);
+
+    try testing.expectEqualDeep(expected, result.*);
+}
+
+test "test function evaluation" {
+    const cases = [_]struct{ @"test": []const u8, expect: i64 }{
+        .{ .@"test" = "let identity = fn(x) { x; }; identity(5);", .expect = 5 },
+        .{ .@"test" = "let identity = fn(x) { return x; }; identity(5);", .expect = 5 },
+        .{ .@"test" = "let double = fn(x) { x * 2; }; double(5);", .expect = 10 },
+        .{ .@"test" = "let add = fn(x, y) { x + y; }; add(5, 5);", .expect = 10 },
+        .{ .@"test" = "let add = fn(x, y) { x + y; }; add(5 + 5, add(5, 5));", .expect = 20 },
+        .{ .@"test" = "fn(x) { x; }(5)", .expect = 5 },
     };
 
     for (cases) |case| {

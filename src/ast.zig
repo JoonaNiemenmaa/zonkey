@@ -20,16 +20,8 @@ pub const Program = struct {
     statements: []Statement,
 
     pub fn printProgram(self: @This(), writer: *Writer) !void {
-        var gpa: DebugAllocator(.{}) = .init;
-        var arena: ArenaAllocator = .init(gpa.allocator());
-
-        defer arena.deinit();
-
-        const allocator = arena.allocator();
-
-        try writer.flush();
         for (self.statements) |statement| {
-            try writer.print("{s}\n", .{try statement.string(allocator)});
+            try statement.print(writer);
         }
     }
 };
@@ -40,10 +32,60 @@ pub const Statement = union(enum) {
     expressionStatement: ExpressionStatement,
     blockStatement: Block,
 
-    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
+    pub fn print(self: @This(), writer: *Writer) Writer.Error!void {
         return switch (self) {
-            inline else => |s| try s.string(allocator),
+            inline else => |statement| {
+                try statement.print(writer);
+                try writer.print(";\n", .{});
+            },
         };
+    }
+};
+
+pub const LetStatement = struct {
+    token: Token,
+    identifier: Identifier,
+    expression: *const Expression,
+
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try writer.print("let ", .{});
+        try self.identifier.print(writer);
+        try writer.print(" = ", .{});
+        try self.expression.print(writer);
+    }
+};
+
+pub const ReturnStatement = struct {
+    token: Token,
+    expression: *const Expression,
+
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try writer.print("return ", .{});
+        try self.expression.print(writer);
+    }
+};
+
+pub const ExpressionStatement = struct {
+    token: Token,
+    expression: *const Expression,
+
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try self.expression.print(writer);
+    }
+};
+
+pub const Block = struct {
+    
+    token: Token,
+    statements: []const Statement,
+
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try writer.print("{{\n", .{});
+        for (self.statements) |statement| {
+            try writer.print("    ", .{});
+            try statement.print(writer);
+        }
+        try writer.print("}}", .{});
     }
 };
 
@@ -57,10 +99,62 @@ pub const Expression = union(enum) {
     function: Function,
     call: Call,
 
-    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
+    pub fn print(self: @This(), writer: *Writer) Writer.Error!void {
         return switch (self) {
-            inline else => |e| try e.string(allocator),
+            inline else => |expression| try expression.print(writer),
         };
+    }
+};
+
+pub const Boolean = struct {
+    token: Token,
+    value: bool,
+
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try writer.print("{}", .{self.value});
+    }
+};
+
+pub const Identifier = struct {
+    token: Token,
+    name: []const u8,
+
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try writer.print("{s}", .{self.name});
+    }
+};
+
+pub const Integer = struct {
+    token: Token,
+    value: i64,
+
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try writer.print("{}", .{self.value});
+    }
+};
+
+pub const Function = struct {
+    token: Token,
+    parameters: []const Identifier,
+    body: Block,
+
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try writer.print("fn (", .{});for (self.parameters, 0..) |identifier, i| {
+            try identifier.print(writer);
+            if (i < self.parameters.len - 1) try writer.print(", ", .{});
+        }
+        try writer.print(") ", .{});
+        try self.body.print(writer);
+    }
+};
+
+pub const Call = struct {
+    token: Token,
+    function: *const Expression,
+    arguments: []*const Expression,
+
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try self.function.print(writer);
     }
 };
 
@@ -76,6 +170,18 @@ pub fn getPrefixOperator(@"type": TokenType) PrefixOperator {
         else => unreachable,
     };
 }
+
+pub const Prefix = struct {
+    token: Token,
+    operator: PrefixOperator,
+    operand: *const Expression,
+
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try writer.print("{s}(", .{self.token.literal});
+        try self.operand.print(writer);
+        try writer.print(")", .{});
+    }
+};
 
 pub const InfixOperator = enum {
     ADD,
@@ -102,104 +208,18 @@ pub fn getInfixOperator(@"type": TokenType) InfixOperator {
     };
 }
 
-pub const Boolean = struct {
-    token: Token,
-    value: bool,
-
-    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
-        _ = allocator;
-        return self.token.literal;
-    }
-};
-
-pub const Identifier = struct {
-    token: Token,
-    name: []const u8,
-
-    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
-        _ = allocator;
-        return self.token.literal;
-    }
-};
-
-pub const Integer = struct {
-    token: Token,
-    value: i64,
-
-    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
-        _ = allocator;
-        return self.token.literal;
-    }
-};
-
-pub const Function = struct {
-    token: Token,
-    parameters: []const Identifier,
-    body: Block,
-
-    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
-        var params: ArrayList(u8) = .empty;
-        errdefer params.deinit(allocator);
-
-        for (self.parameters, 0..) |parameter, index| {
-            try params.appendSlice(allocator, parameter.name);
-            if (index < self.parameters.len - 1) {
-                try params.appendSlice(allocator, ", ");
-            }
-        }
-
-        return try std.fmt.allocPrint(allocator, "fn ({s}) {s}", .{ try params.toOwnedSlice(allocator), try self.body.string(allocator) });
-    }
-};
-
-pub const Call = struct {
-    token: Token,
-    function: *const Expression,
-    arguments: []*const Expression,
-
-    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
-        var args: ArrayList(u8) = .empty;
-        errdefer args.deinit(allocator);
-
-        for (self.arguments, 0..) |argument, index| {
-            try args.appendSlice(allocator, try argument.string(allocator));
-            if (index < self.arguments.len - 1) {
-                try args.appendSlice(allocator, ", ");
-            }
-        }
-
-        return try std.fmt.allocPrint(allocator, "{s}({s})", .{
-            try self.function.string(allocator),
-            try args.toOwnedSlice(allocator),
-        });
-    }
-};
-
-pub const Prefix = struct {
-    token: Token,
-    operator: PrefixOperator,
-    operand: *const Expression,
-
-    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
-        return try std.fmt.allocPrint(allocator, "({s}{s})", .{
-            self.token.literal,
-            try self.operand.string(allocator),
-        });
-    }
-};
-
 pub const Infix = struct {
     token: Token,
     operator: InfixOperator,
     left: *const Expression,
     right: *const Expression,
 
-    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
-        return try std.fmt.allocPrint(allocator, "({s} {s} {s})", .{
-            try self.left.string(allocator),
-            self.token.literal,
-            try self.right.string(allocator),
-        });
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try writer.print("(", .{});
+        try self.left.print(writer);
+        try writer.print(" {s} ", .{self.token.literal});
+        try self.right.print(writer);
+        try writer.print(")", .{});
     }
 };
 
@@ -209,69 +229,14 @@ pub const If = struct {
     consequence: Block,
     alternative: ?Block,
 
-    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
-        return try std.fmt.allocPrint(allocator, "if ({s}) {s}{s}{s}", .{
-            try self.condition.string(allocator),
-            try self.consequence.string(allocator),
-            if (self.alternative != null) " else " else "",
-            if (self.alternative) |a| try a.string(allocator) else "",
-        });
-    }
-};
-
-pub const Block = struct {
-    token: Token,
-    statements: []const Statement,
-
-    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
-        var block: ArrayList(u8) = .empty;
-        errdefer block.deinit(allocator);
-
-        try block.appendSlice(allocator, "{\n");
-
-        for (self.statements) |statement| {
-            try block.print(allocator, "    {s}\n", .{try statement.string(allocator)});
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try writer.print("if (", .{});
+        try self.condition.print(writer);
+        try writer.print(") ", .{});
+        try self.consequence.print(writer);
+        if (self.alternative) |alternative| {
+            try writer.print(" else ", .{});
+            try alternative.print(writer);
         }
-
-        try block.appendSlice(allocator, "}");
-
-        return try block.toOwnedSlice(allocator);
-    }
-};
-
-pub const LetStatement = struct {
-    token: Token,
-    identifier: Identifier,
-    expression: *const Expression,
-
-    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
-        return try std.fmt.allocPrint(allocator, "{s} {s} = {s};", .{
-            self.token.literal,
-            self.identifier.name,
-            try self.expression.string(allocator),
-        });
-    }
-};
-
-pub const ReturnStatement = struct {
-    token: Token,
-    expression: *const Expression,
-
-    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
-        return try std.fmt.allocPrint(allocator, "{s} {s};", .{
-            self.token.literal,
-            try self.expression.string(allocator),
-        });
-    }
-};
-
-pub const ExpressionStatement = struct {
-    token: Token,
-    expression: *const Expression,
-
-    pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
-        return try std.fmt.allocPrint(allocator, "{s}", .{
-            try self.expression.string(allocator),
-        });
     }
 };

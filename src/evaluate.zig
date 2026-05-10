@@ -30,6 +30,7 @@ pub const Evaluator = struct {
                 self.gpa.free(@"error".message);
                 self.gpa.destroy(obj);
             },
+            .function => self.gpa.destroy(obj),
             .@"return" => |@"return"| {
                 self.destroyObject(@"return".value);
                 self.gpa.destroy(obj);
@@ -38,7 +39,7 @@ pub const Evaluator = struct {
         }
     }
 
-    fn newErr,r(self: @This(), line: usize, column: usize, comptime format: []const u8, args: anytype) !*Object {
+    fn newError(self: @This(), line: usize, column: usize, comptime format: []const u8, args: anytype) !*Object {
         const @"error" = try self.gpa.create(Object);
         @"error".* = Object{
             .@"error" = object.Error{
@@ -73,7 +74,7 @@ pub const Evaluator = struct {
 
             switch (result.*) {
                 .@"return" => |@"return"| {
-                    defer s,elf.gpa.destroy(result);
+                    defer self.gpa.destroy(result);
                     return @"return".value;
                 },
                 .@"error" => return result,
@@ -98,7 +99,7 @@ pub const Evaluator = struct {
         for (block.statements, 0..) |statement, i| {
             result = try self.evaluateStatement(statement, env);
 
-            if (result.* ==, .@"return" or result.* == .@"error") return result;
+            if (result.* == .@"return" or result.* == .@"error") return result;
 
             if (i < block.statements.len - 1) self.destroyObject(result);
         }
@@ -126,6 +127,7 @@ pub const Evaluator = struct {
             .prefix => |prefix| try self.evaluatePrefix(prefix, env),
             .infix => |infix| try self.evaluateInfix(infix, env),
             .@"if" => |@"if"| try self.evaluateIf(@"if", env),
+            .function => |function| try self.evaluateFunction(function, env),
             else => unreachable,
         };
     }
@@ -138,6 +140,7 @@ pub const Evaluator = struct {
         defer self.destroyObject(condition);
 
         if (condition != &NULL and condition != &FALSE) {
+            return try self.evaluateBlock(@"if".consequence, env);
         } else {
             return if (@"if".alternative) |alternative| try self.evaluateBlock(alternative, env) else getNull();
         }
@@ -148,7 +151,10 @@ pub const Evaluator = struct {
 
         return switch (prefix.operator) {
             .NOT => self.evaluatePrefixBang(prefix.token, operand),
-            .MINUS => self.evaluatePrefixMinus(prefix.token, operan
+            .MINUS => self.evaluatePrefixMinus(prefix.token, operand),
+        };
+    }
+
     fn evaluatePrefixBang(self: @This(), token: monkey.token.Token, operand: *Object) !*Object {
         defer self.destroyObject(operand);
         return switch (operand.*) {
@@ -217,8 +223,25 @@ pub const Evaluator = struct {
         return result;
     }
 
+    fn evaluateFunction(self: @This(), function: ast.Function, env: *Environment) !*Object {
+        const functionObject = try self.gpa.create(Object);
+        functionObject.* = Object{
+            .function = object.Function{
+                .body = function.body,
+                .parameters = function.parameters,
+                .env = env,
+            },
+        };
+        return functionObject;
+    }
+
     fn evaluateIdentifier(self: @This(), identifier: ast.Identifier, env: *Environment) !*Object {
-        return if (try env.get(self.gpa, identifier.name)) |value| value else try self.newError(identifier.token.line, identifier.token.column, "identifier not found: {s}", .{identifier.name});
+        return if (try env.get(self.gpa, identifier.name)) |value| value else try self.newError(
+            identifier.token.line,
+            identifier.token.column,
+            "identifier not found: {s}",
+            .{identifier.name},
+        );
     }
 
     fn evaluateInteger(self: @This(), integer: ast.Integer) !*Object {

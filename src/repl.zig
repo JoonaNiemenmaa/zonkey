@@ -6,6 +6,7 @@ const ArenaAllocator = std.heap.ArenaAllocator; const Reader = std.Io.Reader;
 const Writer = std.Io.Writer;
 const File = std.Io.File;
 const Io = std.Io;
+const ArrayList = std.ArrayList;
 
 const Scanner = monkey.scanner.Scanner;
 const Parser = monkey.parser.Parser;
@@ -28,18 +29,9 @@ const MONKEY_FACE =
     \\          '-----'
 ;
 
-fn printParserErrors(writer: *Writer, errors: [][]const u8) !void {
-    try writer.print("{s}\n", .{ MONKEY_FACE });
-    try writer.print("Woops! We ran into some monkey business here!\n", .{});
-    try writer.print("  parser errors:\n", .{});
-
-    for (errors) |@"error"| try writer.print("    {s}\n", .{ @"error" }); 
-}
-
 pub fn startRepl() !void {
 
     var debugAllocator: DebugAllocator(.{}) = .init;
-    defer std.debug.print("{}\n", .{ debugAllocator.deinit() });
 
     const gpa = debugAllocator.allocator();
 
@@ -58,38 +50,51 @@ pub fn startRepl() !void {
     try stdout.print("Feel free to type in commands\n", .{});
 
     var envArena: ArenaAllocator = .init(gpa);
-    defer envArena.deinit();
-
     var env: Environment = .init(envArena.allocator());
-    defer env.deinit();
+    var parserArena: ArenaAllocator = .init(gpa);
+    var inputArena: ArenaAllocator = .init(gpa);
+    var lines: ArrayList([]const u8) = .empty;
+
+    defer {
+        envArena.deinit();
+        env.deinit();
+        parserArena.deinit();
+        inputArena.deinit();
+        lines.deinit(gpa); 
+        std.debug.print("{}\n", .{ debugAllocator.deinit() });
+    }
 
     const evaluator: Evaluator = .init(gpa);
 
     while (true) {
-        var parserArena: ArenaAllocator = .init(gpa);
-        defer parserArena.deinit();
-
-        const arena = parserArena.allocator();
-
         try stdout.print(">> ", .{});
         try stdout.flush();
 
-        const input = try stdin.takeDelimiter('\n') orelse return;
+        const buffer = try stdin.takeDelimiter('\n') orelse return;
+
+        const input = try inputArena.allocator().alloc(u8, buffer.len);
+        std.mem.copyForwards(u8, input, buffer);
+
+        try lines.append(gpa, input);
 
         var scanner: Scanner = .init(input);
 
-        var parser: Parser = .init(arena, &scanner);
+        var parser: Parser = .init(parserArena.allocator(), &scanner);
 
         const program = try parser.parseProgram();
 
-        const errors = try parser.errors.toOwnedSlice(arena);
+        const errors = try parser.errors.toOwnedSlice(parserArena.allocator());
 
         if (errors.len == 0) {
             const result = try evaluator.evaluateProgram(program, &env);
             try result.print(stdout);
             evaluator.destroyObject(result);
         } else {
-            try printParserErrors(stdout, errors);
+            try stdout.print("{s}\n", .{ MONKEY_FACE });
+            try stdout.print("Woops! We ran into some monkey business here!\n", .{});
+            try stdout.print("  parser errors:\n", .{});
+
+            for (errors) |@"error"| try stdout.print("    {s}\n", .{ @"error" }); 
         }
 
         try stdout.flush();

@@ -35,13 +35,12 @@ pub const Object = union(ObjectType) {
             .function => |function| {
                 try writer.print("fn (", .{});
                 for (function.parameters, 0..) |parameter, i| {
-                    try writer.print("{s}", .{parameter.name});
+                    try parameter.print(writer);
                     if (i < function.parameters.len - 1) try writer.print(", ", .{});
                 }
-                try writer.print(") {\n", .{});
-                for (function.body.statements) |statement| {
-                    try writer.print("\n", .{statement.string()});
-                }
+                try writer.print(") ", .{});
+                try function.body.print(writer);
+                try writer.print("\n", .{});
             },
         }
     }
@@ -68,25 +67,22 @@ pub const Boolean = struct {
 pub const Null = struct {};
 
 pub const Function = struct {
-    parameters: []*ast.Identifier,
-    body: *ast.Block,
+    parameters: []const ast.Identifier,
+    body: ast.Block,
+    env: *Environment,
 };
 
 pub const Environment = struct {
-    bindings: StringHashMap,(*Object),
+    bindings: StringHashMap(*Object),
     arena: Allocator,
 
     pub fn init(arena: Allocator) @This() {
         return @This(){
-            .bindings = StringHashMap(*Object).init(arena),
-            .arena = arena,
+            .bindings = StringHashMap(*Object).init(arena), .arena = arena,
         };
     }
 
-    pub fn put(self: *@This(), identifier: []const u8, obj: *Object) !void {
-        const key = try self.arena.alloc(u8, identifier.len);
-        std.mem.copyForwards(u8, key, identifier);
-
+    pub fn put(self: *@This(), key: []const u8, obj: *Object) !void {
         switch (obj.*) {
             .integer => {
                 const value = try self.arena.create(Object);
@@ -98,7 +94,7 @@ pub const Environment = struct {
             },
         }
     }
-,
+
     pub fn get(self: *@This(), allocator: Allocator, key: []const u8) !?*Object {
         if (self.bindings.get(key)) |value| {
             switch (value.*) {
@@ -120,7 +116,4 @@ pub const Environment = struct {
         self.bindings.deinit();
     }
 };
-
-
-
 
