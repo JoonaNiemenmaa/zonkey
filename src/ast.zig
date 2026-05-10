@@ -73,7 +73,7 @@ pub fn getPrefixOperator(@"type": TokenType) PrefixOperator {
     return switch (@"type") {
         .BANG => .NOT,
         .MINUS => .MINUS,
-        else => unreachable
+        else => unreachable,
     };
 }
 
@@ -98,7 +98,7 @@ pub fn getInfixOperator(@"type": TokenType) InfixOperator {
         .NOT_EQUALS => .NOT_EQUALS,
         .LESS_THAN => .LESS_THAN,
         .GREATER_THAN => .GREATER_THAN,
-        else => unreachable
+        else => unreachable,
     };
 }
 
@@ -138,7 +138,6 @@ pub const Function = struct {
     body: Block,
 
     pub fn string(self: @This(), allocator: Allocator) Allocator.Error![]const u8 {
-
         var params: ArrayList(u8) = .empty;
         errdefer params.deinit(allocator);
 
@@ -149,10 +148,7 @@ pub const Function = struct {
             }
         }
 
-        return try std.fmt.allocPrint(allocator, "fn ({s}) {s}", .{
-            try params.toOwnedSlice(allocator),
-            try self.body.string(allocator)
-        });
+        return try std.fmt.allocPrint(allocator, "fn ({s}) {s}", .{ try params.toOwnedSlice(allocator), try self.body.string(allocator) });
     }
 };
 

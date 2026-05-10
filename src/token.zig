@@ -31,7 +31,7 @@ pub const TokenType = enum {
     IDENT,
     INT,
     EOF,
-    ILLEGAL
+    ILLEGAL,
 };
 
 pub const Token = struct {

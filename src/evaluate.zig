@@ -8,19 +8,13 @@ const Object = object.Object;
 const Environment = object.Environment;
 const Allocator = std.mem.Allocator;
 
-pub const TRUE = Object{
-    .boolean = object.Boolean{ .value = true }
-};
+pub const TRUE = Object{ .boolean = object.Boolean{ .value = true } };
 
-pub const FALSE = Object{
-    .boolean = object.Boolean{ .value = false }
-};
+pub const FALSE = Object{ .boolean = object.Boolean{ .value = false } };
 
-pub const NULL = Object{
-    .@"null" = object.Null{}
-};
+pub const NULL = Object{ .null = object.Null{} };
 
-pub const Evaluator = struct{
+pub const Evaluator = struct {
     gpa: Allocator,
 
     pub fn init(gpa: Allocator) @This() {
@@ -40,20 +34,20 @@ pub const Evaluator = struct{
                 self.destroyObject(@"return".value);
                 self.gpa.destroy(obj);
             },
-            else => {}
+            else => {},
         }
     }
 
-    fn newError(self: @This(), line: usize, column: usize, comptime format: []const u8, args: anytype) !*Object {
-         const @"error" = try self.gpa.create(Object);
-         @"error".* = Object{
+    fn newErr,r(self: @This(), line: usize, column: usize, comptime format: []const u8, args: anytype) !*Object {
+        const @"error" = try self.gpa.create(Object);
+        @"error".* = Object{
             .@"error" = object.Error{
                 .line = line,
                 .column = column,
                 .message = try std.fmt.allocPrint(self.gpa, format, args),
-            }
-         };
-         return @"error";
+            },
+        };
+        return @"error";
     }
 
     fn getNull() *Object {
@@ -66,11 +60,9 @@ pub const Evaluator = struct{
 
     fn createIntegerObject(self: @This(), value: i64) !*Object {
         const integer = try self.gpa.create(Object);
-        integer.* = Object{
-            .integer = object.Integer{
-                .value = value,
-            }
-        };
+        integer.* = Object{ .integer = object.Integer{
+            .value = value,
+        } };
         return integer;
     }
 
@@ -81,11 +73,11 @@ pub const Evaluator = struct{
 
             switch (result.*) {
                 .@"return" => |@"return"| {
-                    defer self.gpa.destroy(result);
+                    defer s,elf.gpa.destroy(result);
                     return @"return".value;
                 },
                 .@"error" => return result,
-                else => if (i < program.statements.len - 1) self.destroyObject(result)
+                else => if (i < program.statements.len - 1) self.destroyObject(result),
             }
         }
         return result;
@@ -106,7 +98,7 @@ pub const Evaluator = struct{
         for (block.statements, 0..) |statement, i| {
             result = try self.evaluateStatement(statement, env);
 
-            if (result.* == .@"return" or result.* == .@"error") return result;
+            if (result.* ==, .@"return" or result.* == .@"error") return result;
 
             if (i < block.statements.len - 1) self.destroyObject(result);
         }
@@ -115,11 +107,7 @@ pub const Evaluator = struct{
 
     fn evaluateReturn(self: @This(), statement: ast.ReturnStatement, env: *Environment) !*Object {
         const result = try self.gpa.create(Object);
-        result.* = Object{
-            .@"return" = object.Return{
-                .value = try self.evaluateExpression(statement.expression.*, env)
-            }
-        };
+        result.* = Object{ .@"return" = object.Return{ .value = try self.evaluateExpression(statement.expression.*, env) } };
         return result;
     }
 
@@ -148,13 +136,11 @@ pub const Evaluator = struct{
         if (condition.* == .@"error") return condition;
 
         defer self.destroyObject(condition);
-        
+
         if (condition != &NULL and condition != &FALSE) {
-            return self.evaluateBlock(@"if".consequence, env);                
         } else {
             return if (@"if".alternative) |alternative| try self.evaluateBlock(alternative, env) else getNull();
         }
-
     }
 
     fn evaluatePrefix(self: @This(), prefix: ast.Prefix, env: *Environment) !*Object {
@@ -162,22 +148,14 @@ pub const Evaluator = struct{
 
         return switch (prefix.operator) {
             .NOT => self.evaluatePrefixBang(prefix.token, operand),
-            .MINUS => self.evaluatePrefixMinus(prefix.token, operand),
-        };
-    }
-
+            .MINUS => self.evaluatePrefixMinus(prefix.token, operan
     fn evaluatePrefixBang(self: @This(), token: monkey.token.Token, operand: *Object) !*Object {
         defer self.destroyObject(operand);
         return switch (operand.*) {
             .boolean => |boolean| toBooleanObject(!boolean.value),
-            .@"null" => toBooleanObject(true),
+            .null => toBooleanObject(true),
             .integer => |integer| toBooleanObject(integer.value == 0),
-            else => self.newError(
-                token.line,
-                token.column,
-                "unknown operator: {s}{s}",
-                .{ token.literal, @tagName(operand.*) }
-            )
+            else => self.newError(token.line, token.column, "unknown operator: {s}{s}", .{ token.literal, @tagName(operand.*) }),
         };
     }
 
@@ -187,17 +165,11 @@ pub const Evaluator = struct{
                 operand.integer.value = -integer.value;
                 break :integerBlock operand;
             },
-            else => self.newError(
-                token.line,
-                token.column,
-                "unknown operator: {s}{s}",
-                .{ token.literal, @tagName(operand.*) }
-            )
+            else => self.newError(token.line, token.column, "unknown operator: {s}{s}", .{ token.literal, @tagName(operand.*) }),
         };
     }
 
     fn evaluateInfix(self: @This(), infix: ast.Infix, env: *Environment) !*Object {
-
         const left = try self.evaluateExpression(@constCast(infix.left).*, env);
         const right = try self.evaluateExpression(@constCast(infix.right).*, env);
 
@@ -212,28 +184,22 @@ pub const Evaluator = struct{
             return switch (infix.operator) {
                 .EQUALS => toBooleanObject(left == right),
                 .NOT_EQUALS => toBooleanObject(left != right),
-                else => self.newError(infix.token.line, infix.token.column, "unknown operator: {s} {s} {s}", .{ @tagName(left.*), infix.token.literal, @tagName(right.*) })
+                else => self.newError(infix.token.line, infix.token.column, "unknown operator: {s} {s} {s}", .{ @tagName(left.*), infix.token.literal, @tagName(right.*) }),
             };
         }
 
-        return self.newError(
-            infix.token.line,
-            infix.token.column,
-            "type mismatch: {s} {s} {s}",
-            .{ @tagName(left.*), infix.token.literal, @tagName(right.*) }
-        );
+        return self.newError(infix.token.line, infix.token.column, "type mismatch: {s} {s} {s}", .{ @tagName(left.*), infix.token.literal, @tagName(right.*) });
     }
 
     fn evaluateIntegerInfix(self: @This(), left: *Object, operator: ast.InfixOperator, right: *Object) !*Object {
-
         const leftInteger = switch (left.*) {
             .integer => |integer| integer,
-            else => unreachable
+            else => unreachable,
         };
 
         const rightInteger = switch (right.*) {
             .integer => |integer| integer,
-            else => unreachable
+            else => unreachable,
         };
 
         const result = switch (operator) {
@@ -252,19 +218,12 @@ pub const Evaluator = struct{
     }
 
     fn evaluateIdentifier(self: @This(), identifier: ast.Identifier, env: *Environment) !*Object {
-        return if (try env.get(self.gpa, identifier.name)) |value| value else try self.newError(
-                identifier.token.line,
-                identifier.token.column,
-                "identifier not found: {s}",
-                .{ identifier.name }
-            );
+        return if (try env.get(self.gpa, identifier.name)) |value| value else try self.newError(identifier.token.line, identifier.token.column, "identifier not found: {s}", .{identifier.name});
     }
 
     fn evaluateInteger(self: @This(), integer: ast.Integer) !*Object {
         const integerObject = try self.gpa.create(Object);
-        integerObject.* = Object{
-            .integer = object.Integer{ .value = integer.value }
-        };
+        integerObject.* = Object{ .integer = object.Integer{ .value = integer.value } };
         return integerObject;
     }
 
@@ -272,4 +231,3 @@ pub const Evaluator = struct{
         return @constCast(if (boolean.value) &TRUE else &FALSE);
     }
 };
-
