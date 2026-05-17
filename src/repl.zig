@@ -11,7 +11,6 @@ const ArrayList = std.ArrayList;
 
 const Scanner = monkey.scanner.Scanner;
 const Parser = monkey.parser.Parser;
-const Evaluator = monkey.evaluate.Evaluator;
 const Environment = monkey.object.Environment;
 
 const BUFFER_SIZE = 256;
@@ -53,13 +52,9 @@ pub fn startRepl() !void {
     var inputArena: ArenaAllocator = .init(gpa);
     var lines: ArrayList([]const u8) = .empty;
     var env: Environment = .init(gpa, null);
-    var evaluator: Evaluator = .init(gpa);
 
     defer {
-        env.bindings.clearAndFree();
-        evaluator.collectGarbage(&env, null) catch {};
-        evaluator.deinit();
-        env.deinit();
+        env.deinit(null);
 
         parserArena.deinit();
         inputArena.deinit();
@@ -88,7 +83,7 @@ pub fn startRepl() !void {
         const errors = try parser.errors.toOwnedSlice(parserArena.allocator());
 
         if (errors.len == 0) {
-            const result = try evaluator.evaluateProgram(program, &env);
+            const result = try monkey.evaluate.evaluateProgram(program, &env);
             try result.print(stdout);
         } else {
             try stdout.print("{s}\n", .{MONKEY_FACE});
