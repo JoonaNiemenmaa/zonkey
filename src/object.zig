@@ -74,41 +74,24 @@ pub const Function = struct {
 
 pub const Environment = struct {
     bindings: StringHashMap(*Object),
-    arena: Allocator,
+    outer: ?*Environment,
 
-    pub fn init(arena: Allocator) @This() {
+    pub fn init(allocator: Allocator, outer: ?*Environment) @This() {
         return @This(){
-            .bindings = StringHashMap(*Object).init(arena), .arena = arena,
+            .bindings = StringHashMap(*Object).init(allocator),
+            .outer = outer,
         };
     }
 
     pub fn put(self: *@This(), key: []const u8, obj: *Object) !void {
-        switch (obj.*) {
-            .integer => {
-                const value = try self.arena.create(Object);
-                value.* = obj.*;
-                try self.bindings.put(key, value);
-            },
-            else => {
-                try self.bindings.put(key, obj);
-            },
-        }
+        try self.bindings.put(key, obj);
     }
 
-    pub fn get(self: *@This(), allocator: Allocator, key: []const u8) !?*Object {
+    pub fn get(self: *@This(), key: []const u8) !?*Object {
         if (self.bindings.get(key)) |value| {
-            switch (value.*) {
-                .integer => {
-                    const integer = try allocator.create(Object);
-                    integer.* = value.*;
-                    return integer;
-                },
-                else => {
-                    return value;
-                },
-            }
+            return value;
         } else {
-            return null;
+            if (self.outer) |outer| return try outer.get(key) else return null;
         }
     }
 
@@ -116,4 +99,3 @@ pub const Environment = struct {
         self.bindings.deinit();
     }
 };
-

@@ -75,7 +75,6 @@ pub const ExpressionStatement = struct {
 };
 
 pub const Block = struct {
-    
     token: Token,
     statements: []const Statement,
 
@@ -139,7 +138,8 @@ pub const Function = struct {
     body: Block,
 
     pub fn print(self: @This(), writer: *Writer) !void {
-        try writer.print("fn (", .{});for (self.parameters, 0..) |identifier, i| {
+        try writer.print("fn (", .{});
+        for (self.parameters, 0..) |identifier, i| {
             try identifier.print(writer);
             if (i < self.parameters.len - 1) try writer.print(", ", .{});
         }
@@ -155,6 +155,12 @@ pub const Call = struct {
 
     pub fn print(self: @This(), writer: *Writer) !void {
         try self.function.print(writer);
+        try writer.print("(", .{});
+        for (self.arguments, 1..) |argument, i| {
+            try argument.print(writer);
+            if (i < self.arguments.len) try writer.print(", ", .{});
+        }
+        try writer.print(")", .{});
     }
 };
 

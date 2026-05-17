@@ -2,7 +2,8 @@ const std = @import("std");
 const monkey = @import("root.zig");
 
 const DebugAllocator = std.heap.DebugAllocator;
-const ArenaAllocator = std.heap.ArenaAllocator; const Reader = std.Io.Reader;
+const ArenaAllocator = std.heap.ArenaAllocator;
+const Reader = std.Io.Reader;
 const Writer = std.Io.Writer;
 const File = std.Io.File;
 const Io = std.Io;
@@ -15,7 +16,7 @@ const Environment = monkey.object.Environment;
 
 const BUFFER_SIZE = 256;
 
-const MONKEY_FACE = 
+const MONKEY_FACE =
     \\           __,__
     \\  .--.  .-"     "-.  .--.
     \\ / .. \/  .-. .-.  \/ .. \
@@ -30,7 +31,6 @@ const MONKEY_FACE =
 ;
 
 pub fn startRepl() !void {
-
     var debugAllocator: DebugAllocator(.{}) = .init;
 
     const gpa = debugAllocator.allocator();
@@ -49,22 +49,24 @@ pub fn startRepl() !void {
     try stdout.print("Hello user! This is the Monkey programming language!\n", .{});
     try stdout.print("Feel free to type in commands\n", .{});
 
-    var envArena: ArenaAllocator = .init(gpa);
-    var env: Environment = .init(envArena.allocator());
     var parserArena: ArenaAllocator = .init(gpa);
     var inputArena: ArenaAllocator = .init(gpa);
     var lines: ArrayList([]const u8) = .empty;
+    var env: Environment = .init(gpa, null);
+    var evaluator: Evaluator = .init(gpa);
 
     defer {
-        envArena.deinit();
+        env.bindings.clearAndFree();
+        evaluator.collectGarbage(&env, null) catch {};
+        evaluator.deinit();
         env.deinit();
+
         parserArena.deinit();
         inputArena.deinit();
-        lines.deinit(gpa); 
-        std.debug.print("{}\n", .{ debugAllocator.deinit() });
-    }
+        lines.deinit(gpa);
 
-    const evaluator: Evaluator = .init(gpa);
+        std.debug.print("{}\n", .{debugAllocator.deinit()});
+    }
 
     while (true) {
         try stdout.print(">> ", .{});
@@ -88,13 +90,12 @@ pub fn startRepl() !void {
         if (errors.len == 0) {
             const result = try evaluator.evaluateProgram(program, &env);
             try result.print(stdout);
-            evaluator.destroyObject(result);
         } else {
-            try stdout.print("{s}\n", .{ MONKEY_FACE });
+            try stdout.print("{s}\n", .{MONKEY_FACE});
             try stdout.print("Woops! We ran into some monkey business here!\n", .{});
             try stdout.print("  parser errors:\n", .{});
 
-            for (errors) |@"error"| try stdout.print("    {s}\n", .{ @"error" }); 
+            for (errors) |@"error"| try stdout.print("    {s}\n", .{@"error"});
         }
 
         try stdout.flush();
