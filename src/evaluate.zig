@@ -11,9 +11,7 @@ const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
 pub const TRUE = Object{ .boolean = object.Boolean{ .value = true } };
-
 pub const FALSE = Object{ .boolean = object.Boolean{ .value = false } };
-
 pub const NULL = Object{ .null = object.Null{} };
 
 fn toBooleanObject(boolean: bool) *Object {
@@ -35,7 +33,7 @@ pub fn evaluateProgram(program: ast.Program, env: *Environment) !*Object {
     for (program.statements) |statement| {
         result = try evaluateStatement(statement, env);
 
-        try env.collectGarbage(result);
+        try env.markAndSweep(result);
 
         switch (result.*) {
             .@"return" => |@"return"| return @"return".value,
@@ -61,7 +59,7 @@ fn evaluateBlock(block: ast.Block, env: *Environment) !*Object {
         result = try evaluateStatement(statement, env);
         if (result.* == .@"return" or result.* == .@"error") return result;
     }
-    try env.collectGarbage(result);
+    try env.markAndSweep(result);
     return result;
 }
 

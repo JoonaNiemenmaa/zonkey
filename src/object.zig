@@ -137,13 +137,27 @@ pub const Environment = struct {
         if (self.outer) |outer| try outer.mark(marked);
     }
 
-    pub fn collectGarbage(self: *@This(), exclude: ?*Object) !void {
+    pub fn markAndSweep(self: *@This(), exclude: ?*Object) !void {
         var marked: AutoHashMap(*Object, void) = .init(self.gpa);
         defer marked.deinit();
 
         if (exclude) |excl| try marked.put(excl, {});
 
-        try self.mark(&marked);
+        //try self.mark(&marked);
+
+        var iterator = self.bindings.iterator();
+        var entry = iterator.next();
+        while (entry != null) {
+            const ptr = entry.?.value_ptr.*;
+
+            switch (ptr.*) {
+                .boolean => {},
+                .null => {},
+                else => try marked.put(ptr, {}),
+            }
+
+            entry = iterator.next();
+        }
 
         var remove: ArrayList(usize) = .empty;
         defer remove.deinit(self.gpa);
@@ -179,7 +193,7 @@ pub const Environment = struct {
 
     pub fn deinit(self: *@This(), exclude: ?*Object) void {
         self.bindings.clearAndFree();
-        self.collectGarbage(exclude) catch {};
+        self.markAndSweep(exclude) catch {};
         self.stack.deinit(self.gpa);
         self.bindings.deinit();
     }

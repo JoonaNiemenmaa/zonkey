@@ -29,6 +29,54 @@ const MONKEY_FACE =
     \\          '-----'
 ;
 
+pub fn evaluateFile(io: Io, filename: []const u8) !void {
+    var debugAllocator: DebugAllocator(.{}) = .init;
+    const gpa = debugAllocator.allocator();
+    defer std.debug.print("{}\n", .{debugAllocator.deinit()});
+
+    var arenaAllocator: ArenaAllocator = .init(gpa);
+    defer arenaAllocator.deinit();
+
+    const arena = arenaAllocator.allocator();
+
+    const file: File = try std.Io.Dir.cwd().openFile(io, filename, .{ .mode = .read_only });
+    defer file.close(io);
+
+    const stat = try file.stat(io);
+
+    if (stat.size == 0) return;
+
+    const code = try arena.alloc(u8, stat.size);
+
+    _ = try file.readPositionalAll(io, code, 0);
+
+    var stdoutBuf: [BUFFER_SIZE]u8 = undefined;
+    var stdoutWriter = File.stdout().writer(io, &stdoutBuf);
+    const stdout = &stdoutWriter.interface;
+
+    var scanner: Scanner = .init(code);
+    var parser: Parser = .init(arena, &scanner);
+
+    const program = try parser.parseProgram();
+
+    const errors = try parser.errors.toOwnedSlice(arena);
+
+    if (errors.len == 0) {
+        var env: Environment = .init(gpa, null);
+        defer env.deinit(null);
+        const result = try monkey.evaluate.evaluateProgram(program, &env);
+        try result.print(stdout);
+    } else {
+        try stdout.print("{s}\n", .{MONKEY_FACE});
+        try stdout.print("Woops! We ran into some monkey business here!\n", .{});
+        try stdout.print("  parser errors:\n", .{});
+
+        for (errors) |@"error"| try stdout.print("    {s}\n", .{@"error"});
+    }
+
+    try stdout.flush();
+}
+
 pub fn startRepl() !void {
     var debugAllocator: DebugAllocator(.{}) = .init;
 
