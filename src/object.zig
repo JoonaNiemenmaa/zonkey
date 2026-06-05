@@ -143,20 +143,14 @@ pub const Environment = struct {
 
         if (exclude) |excl| try marked.put(excl, {});
 
-        //try self.mark(&marked);
-
-        var iterator = self.bindings.iterator();
-        var entry = iterator.next();
-        while (entry != null) {
-            const ptr = entry.?.value_ptr.*;
-
+        var iterator = self.bindings.valueIterator();
+        while (iterator.next()) |entry| {
+            const ptr = entry.*;
             switch (ptr.*) {
                 .boolean => {},
                 .null => {},
                 else => try marked.put(ptr, {}),
             }
-
-            entry = iterator.next();
         }
 
         var remove: ArrayList(usize) = .empty;
