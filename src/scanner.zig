@@ -37,7 +37,7 @@ pub const Scanner = struct {
     }
 
     pub fn init(code: []const u8) @This() {
-        return Scanner{ 
+        return Scanner{
             .code = code,
             .current = 0,
             .ahead = 1,
@@ -74,6 +74,20 @@ pub const Scanner = struct {
         return self.code[start..end];
     }
 
+    fn readString(self: *@This()) []const u8 {
+        const start: usize = self.current;
+        var end: usize = self.current;
+
+        while (self.getCurrent() != '"' and self.getCurrent() != 0) {
+            end += 1;
+            self.nextChar();
+        }
+
+        self.nextChar();
+
+        return self.code[start..end];
+    }
+
     fn createToken(self: *@This(), @"type": TokenType, literal: []const u8) Token {
         return Token{ .type = @"type", .literal = literal, .line = self.line, .column = self.column };
     }
@@ -98,6 +112,11 @@ pub const Scanner = struct {
             ',' => token = self.createToken(TokenType.COMMA, ","),
             '<' => token = self.createToken(TokenType.LESS_THAN, "<"),
             '>' => token = self.createToken(TokenType.GREATER_THAN, ">"),
+            '"' => {
+                self.nextChar();
+                const string = self.readString();
+                token = self.createToken(TokenType.STRING, string);
+            },
             '!' => {
                 if (self.getAhead() == '=') {
                     token = self.createToken(TokenType.NOT_EQUALS, "!=");
@@ -122,7 +141,6 @@ pub const Scanner = struct {
                 if (std.ascii.isAlphabetic(self.getCurrent())) {
                     const literal = self.readIdent();
                     return Token{ .type = lookupKeyword(literal), .literal = literal, .line = line, .column = column };
-
                 } else if (std.ascii.isDigit(self.getCurrent())) {
                     const literal = self.readNumber();
                     return Token{ .type = TokenType.INT, .literal = literal, .line = line, .column = column };
@@ -136,4 +154,3 @@ pub const Scanner = struct {
         return token;
     }
 };
-

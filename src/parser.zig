@@ -55,12 +55,7 @@ pub const Parser = struct {
             self.nextToken();
             return true;
         } else {
-            try self.appendError("{}:{} Unexpected token of type '{}' found when '{}' was expected.", .{
-                self.ahead.line,
-                self.ahead.column,
-                self.ahead.type,
-                expect
-            });
+            try self.appendError("{}:{} Unexpected token of type '{}' found when '{}' was expected.", .{ self.ahead.line, self.ahead.column, self.ahead.type, expect });
             return false;
         }
     }
@@ -79,6 +74,13 @@ pub const Parser = struct {
         };
     }
 
+    fn parseString(self: *@This()) ast.String {
+        return ast.String{
+            .token = self.current,
+            .value = self.current.literal,
+        };
+    }
+
     fn parseBoolean(self: *@This()) ast.Boolean {
         return ast.Boolean{
             .token = self.current,
@@ -91,7 +93,6 @@ pub const Parser = struct {
     }
 
     fn parseFunction(self: *@This()) !?ast.Function {
-        
         const token = self.current;
 
         if (!try self.expectAhead(.LPAREN)) return null;
@@ -100,7 +101,7 @@ pub const Parser = struct {
 
         var parameters: ArrayList(ast.Identifier) = .empty;
         errdefer parameters.deinit(self.allocator);
-    
+
         while (self.currentTokenIs(.IDENT)) {
             const identifier = self.parseIdentifier();
             try parameters.append(self.allocator, identifier);
@@ -110,19 +111,14 @@ pub const Parser = struct {
         }
 
         if (!self.currentTokenIs(.RPAREN)) {
-            try self.appendError("{}:{} Unexpected token of type '{}' found when '{}' was expected.", .{
-                self.current.line,
-                self.current.column,
-                self.current.type,
-                TokenType.RPAREN
-            });
+            try self.appendError("{}:{} Unexpected token of type '{}' found when '{}' was expected.", .{ self.current.line, self.current.column, self.current.type, TokenType.RPAREN });
             return null;
         }
 
         if (!try self.expectAhead(.LBRACE)) return null;
 
         const body = try self.parseBlock();
-        
+
         return ast.Function{
             .token = token,
             .parameters = try parameters.toOwnedSlice(self.allocator),
@@ -140,7 +136,7 @@ pub const Parser = struct {
         if (!try self.expectAhead(.LBRACE)) return null;
 
         const consequence = try self.parseBlock();
-        
+
         var alternative: ?ast.Block = null;
 
         if (self.aheadTokenIs(.ELSE)) {
@@ -195,13 +191,11 @@ pub const Parser = struct {
 
         if (!try self.expectAhead(.RPAREN)) return null;
 
-        return ast.Expression{
-          .call = .{
-              .token = token,
-              .function = function,
-              .arguments = try arguments.toOwnedSlice(self.allocator),
-          }
-        };
+        return ast.Expression{ .call = .{
+            .token = token,
+            .function = function,
+            .arguments = try arguments.toOwnedSlice(self.allocator),
+        } };
     }
 
     fn parseInfix(self: *@This(), left: *ast.Expression) Allocator.Error!?ast.Expression {
@@ -213,18 +207,15 @@ pub const Parser = struct {
 
         const right = try self.parseExpression(getPrecedence(token.type)) orelse return null;
 
-        return ast.Expression{ 
-            .infix = .{
-                .token = token,
-                .operator = operator,
-                .left = left,
-                .right = right,
-            }
-        };
+        return ast.Expression{ .infix = .{
+            .token = token,
+            .operator = operator,
+            .left = left,
+            .right = right,
+        } };
     }
 
     fn parseGroupedExpression(self: *@This()) !?*ast.Expression {
-
         self.nextToken();
 
         const expression = try self.parseExpression(.LOWEST) orelse return null;
@@ -261,7 +252,7 @@ pub const Parser = struct {
 
     fn getInfixFunction(tokenType: TokenType) *const fn (*@This(), *ast.Expression) Allocator.Error!?ast.Expression {
         return switch (tokenType) {
-            .PLUS => &parseInfix,   
+            .PLUS => &parseInfix,
             .MINUS => &parseInfix,
             .ASTERISK => &parseInfix,
             .SLASH => &parseInfix,
@@ -281,6 +272,7 @@ pub const Parser = struct {
         left.* = switch (self.current.type) {
             .IDENT => ast.Expression{ .identifier = self.parseIdentifier() },
             .INT => ast.Expression{ .integer = self.parseInteger() },
+            .STRING => ast.Expression{ .string = self.parseString() },
             .FALSE => ast.Expression{ .boolean = self.parseBoolean() },
             .TRUE => ast.Expression{ .boolean = self.parseBoolean() },
             .MINUS => ast.Expression{ .prefix = try self.parsePrefix(ast.PrefixOperator.MINUS) orelse return null },
@@ -292,7 +284,7 @@ pub const Parser = struct {
                 try self.appendError("{}:{} Unexpected token of type '{}' found when expression was expected.", .{
                     self.current.line,
                     self.current.column,
-                    self.current.type
+                    self.current.type,
                 });
                 return null;
             },
@@ -314,7 +306,6 @@ pub const Parser = struct {
             };
 
             left = infix;
-
         }
 
         return left;
@@ -430,4 +421,3 @@ pub const Parser = struct {
         }
     }
 };
-

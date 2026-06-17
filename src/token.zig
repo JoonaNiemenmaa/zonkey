@@ -30,6 +30,7 @@ pub const TokenType = enum {
     FN,
     IDENT,
     INT,
+    STRING,
     EOF,
     ILLEGAL,
 };

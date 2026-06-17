@@ -18,6 +18,14 @@ fn toBooleanObject(boolean: bool) *Object {
     return @constCast(if (boolean) &TRUE else &FALSE);
 }
 
+fn createStringObject(value: []const u8, env: *Environment) !*Object {
+    const stringObject = try env.createObject();
+    const string = try env.gpa.alloc(u8, value.len);
+    std.mem.copyForwards(u8, string, value);
+    stringObject.* = Object{ .string = object.String{ .value = string } };
+    return stringObject;
+}
+
 fn createIntegerObject(value: i64, env: *Environment) !*Object {
     const integer = try env.createObject();
     integer.* = Object{
@@ -57,6 +65,7 @@ fn evaluateBlock(block: ast.Block, env: *Environment) !*Object {
     var result: *Object = @constCast(&NULL);
     for (block.statements) |statement| {
         result = try evaluateStatement(statement, env);
+        try env.markAndSweep(result);
         if (result.* == .@"return" or result.* == .@"error") return result;
     }
     try env.markAndSweep(result);
@@ -81,6 +90,7 @@ fn evaluateExpression(expression: ast.Expression, env: *Environment) Allocator.E
         .identifier => |identifier| evaluateIdentifier(identifier, env),
         .integer => |integer| evaluateInteger(integer, env),
         .boolean => |boolean| evaluateBoolean(boolean),
+        .string => |string| evaluateString(string, env),
         .prefix => |prefix| try evaluatePrefix(prefix, env),
         .infix => |infix| try evaluateInfix(infix, env),
         .@"if" => |@"if"| try evaluateIf(@"if", env),
@@ -172,7 +182,15 @@ fn evaluatePrefixBang(token: monkey.token.Token, operand: *Object, env: *Environ
         .boolean => |boolean| toBooleanObject(!boolean.value),
         .null => toBooleanObject(true),
         .integer => |integer| toBooleanObject(integer.value == 0),
-        else => env.createError(token.line, token.column, "unknown operator: {s}{s}", .{ token.literal, @tagName(operand.*) }),
+        else => env.createError(
+            token.line,
+            token.column,
+            "unknown operator: {s}{s}",
+            .{
+                token.literal,
+                @tagName(operand.*),
+            },
+        ),
     };
 }
 
@@ -182,7 +200,15 @@ fn evaluatePrefixMinus(token: monkey.token.Token, operand: *Object, env: *Enviro
             operand.integer.value = -integer.value;
             break :integerBlock operand;
         },
-        else => env.createError(token.line, token.column, "unknown operator: {s}{s}", .{ token.literal, @tagName(operand.*) }),
+        else => env.createError(
+            token.line,
+            token.column,
+            "unknown operator: {s}{s}",
+            .{
+                token.literal,
+                @tagName(operand.*),
+            },
+        ),
     };
 }
 
@@ -199,11 +225,67 @@ fn evaluateInfix(infix: ast.Infix, env: *Environment) !*Object {
         return switch (infix.operator) {
             .EQUALS => toBooleanObject(left == right),
             .NOT_EQUALS => toBooleanObject(left != right),
-            else => env.createError(infix.token.line, infix.token.column, "unknown operator: {s} {s} {s}", .{ @tagName(left.*), infix.token.literal, @tagName(right.*) }),
+            else => env.createError(
+                infix.token.line,
+                infix.token.column,
+                "unknown operator: {s} {s} {s}",
+                .{
+                    @tagName(left.*),
+                    infix.token.literal,
+                    @tagName(right.*),
+                },
+            ),
         };
+    } else if (left.* == .string and right.* == .string) {
+        return evaluateStringInfix(left, infix, right, env);
     }
 
-    return env.createError(infix.token.line, infix.token.column, "type mismatch: {s} {s} {s}", .{ @tagName(left.*), infix.token.literal, @tagName(right.*) });
+    return env.createError(
+        infix.token.line,
+        infix.token.column,
+        "type mismatch: {s} {s} {s}",
+        .{
+            @tagName(left.*),
+            infix.token.literal,
+            @tagName(right.*),
+        },
+    );
+}
+
+fn evaluateStringInfix(left: *Object, infix: ast.Infix, right: *Object, env: *Environment) !*Object {
+    const leftString = switch (left.*) {
+        .string => |string| string,
+        else => unreachable,
+    };
+
+    const rightString = switch (right.*) {
+        .string => |string| string,
+        else => unreachable,
+    };
+
+    return switch (infix.operator) {
+        .ADD => {
+            const result = try env.createObject();
+
+            result.* = Object{
+                .string = .{
+                    .value = try std.mem.concat(env.gpa, u8, &.{ leftString.value, rightString.value }),
+                },
+            };
+
+            return result;
+        },
+        else => env.createError(
+            infix.token.line,
+            infix.token.column,
+            "unknown operator: {s} {s} {s}",
+            .{
+                @tagName(left.*),
+                infix.token.literal,
+                @tagName(right.*),
+            },
+        ),
+    };
 }
 
 fn evaluateIntegerInfix(left: *Object, operator: ast.InfixOperator, right: *Object, env: *Environment) !*Object {
@@ -261,4 +343,12 @@ fn evaluateInteger(integer: ast.Integer, env: *Environment) !*Object {
 
 fn evaluateBoolean(boolean: ast.Boolean) *Object {
     return @constCast(if (boolean.value) &TRUE else &FALSE);
+}
+
+fn evaluateString(stringNode: ast.String, env: *Environment) !*Object {
+    const stringObject = try env.createObject();
+    const string = try env.gpa.alloc(u8, stringNode.value.len);
+    std.mem.copyForwards(u8, string, stringNode.value);
+    stringObject.* = Object{ .string = object.String{ .value = string } };
+    return stringObject;
 }

@@ -92,6 +92,7 @@ pub const Expression = union(enum) {
     identifier: Identifier,
     integer: Integer,
     boolean: Boolean,
+    string: String,
     prefix: Prefix,
     infix: Infix,
     @"if": If,
@@ -129,6 +130,15 @@ pub const Integer = struct {
 
     pub fn print(self: @This(), writer: *Writer) !void {
         try writer.print("{}", .{self.value});
+    }
+};
+
+pub const String = struct {
+    token: Token,
+    value: []const u8,
+
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try writer.print("{s}", .{self.value});
     }
 };
 

@@ -13,6 +13,7 @@ const ArenaAllocator = std.heap.ArenaAllocator;
 pub const ObjectType = enum {
     integer,
     boolean,
+    string,
     null,
     @"return",
     @"error",
@@ -22,6 +23,7 @@ pub const ObjectType = enum {
 pub const Object = union(ObjectType) {
     integer: Integer,
     boolean: Boolean,
+    string: String,
     null: Null,
     @"return": Return,
     @"error": Error,
@@ -31,6 +33,7 @@ pub const Object = union(ObjectType) {
         switch (self) {
             .integer => |integer| try writer.print("{}\n", .{integer.value}),
             .boolean => |boolean| try writer.print("{}\n", .{boolean.value}),
+            .string => |string| try writer.print("\"{s}\"\n", .{string.value}),
             .null => try writer.print("null\n", .{}),
             .@"return" => |@"return"| try @"return".value.print(writer),
             .@"error" => |@"error"| try writer.print("{}:{} {s}\n", .{ @"error".line, @"error".column, @"error".message }),
@@ -72,6 +75,10 @@ pub const Function = struct {
     parameters: []const ast.Identifier,
     body: ast.Block,
     env: *Environment,
+};
+
+pub const String = struct {
+    value: []const u8,
 };
 
 pub const Environment = struct {
@@ -179,6 +186,10 @@ pub const Environment = struct {
                 self.gpa.destroy(ptr);
             },
             .@"return" => {
+                self.gpa.destroy(ptr);
+            },
+            .string => |string| {
+                self.gpa.free(string.value);
                 self.gpa.destroy(ptr);
             },
             else => {},
