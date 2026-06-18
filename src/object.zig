@@ -64,14 +64,14 @@ pub const Function = struct {
 
 pub const Environment = struct {
     bindings: StringHashMap(*Object),
-    stack: ArrayList(*Object),
+    stack: ArrayList(?*Object),
     gpa: Allocator,
     outer: ?*Environment,
 
     pub fn init(allocator: Allocator, outer: ?*Environment) @This() {
         return @This(){
-            .bindings = StringHashMap(*Object).init(allocator),
-            .stack = ArrayList(*Object).empty,
+            .bindings = .init(allocator),
+            .stack = .empty,
             .outer = outer,
             .gpa = allocator,
         };
@@ -109,22 +109,16 @@ pub const Environment = struct {
             }
         }
 
-        var remove: ArrayList(usize) = .empty;
-        defer remove.deinit(self.gpa);
-
         for (self.stack.items, 0..) |ptr, i| {
-            if (!ptr.mark) {
-                self.destroyObject(ptr);
-                try remove.append(self.gpa, i);
-            } else {
-                ptr.mark = false;
+            if (ptr) |obj| {
+                if (!obj.mark) {
+                    self.destroyObject(obj);
+                    self.stack.items[i] = null;
+                } else {
+                    obj.mark = false;
+                }
             }
         }
-
-        const removeSlice = try remove.toOwnedSlice(self.gpa);
-        defer self.gpa.free(removeSlice);
-
-        self.stack.orderedRemoveMany(removeSlice);
     }
 
     pub fn destroyObject(self: *@This(), ptr: *Object) void {
@@ -145,7 +139,15 @@ pub const Environment = struct {
 
     pub fn deinit(self: *@This(), exclude: ?*Object) void {
         self.bindings.clearAndFree();
-        self.markAndSweep(exclude) catch {};
+
+        if (exclude) |e| e.mark = true;
+
+        for (self.stack.items) |ptr| {
+            if (ptr) |obj| {
+                if (!obj.mark) self.destroyObject(obj);
+            }
+        }
+
         self.stack.deinit(self.gpa);
         self.bindings.deinit();
     }
