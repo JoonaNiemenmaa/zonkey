@@ -5,7 +5,7 @@
 - `zig build run` — launch REPL
 - `zig build run -- <file>` — evaluate a Monkey source file
 - `zig build test` — run all tests (module tests + exe tests in parallel)
-- `zig test src/<file>_test.zig` — run a single test file directly
+- `zig test src/<file>.zig` — run tests from a single implementation file
 
 ## Architecture
 Standard interpreter pipeline: `Scanner → Parser → AST → Evaluator`
@@ -21,6 +21,6 @@ Standard interpreter pipeline: `Scanner → Parser → AST → Evaluator`
 
 ## Notes
 - Zig 0.16.0, no external dependencies
-- Tests use `std.testing.expectEqualDeep` extensively; test files are `*_test.zig` in `src/`
+- Tests use `std.testing.expectEqualDeep` extensively; tests are embedded in their respective implementation files
 - `.gitignore` entries: `.zig-cache` and `zig-out`
 - No formatter/linter/typechecker beyond `zig build` (the compiler handles type checking)
