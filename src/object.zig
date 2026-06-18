@@ -10,33 +10,22 @@ const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
-pub const ObjectType = enum {
-    integer,
-    boolean,
-    string,
-    null,
-    @"return",
-    @"error",
-    function,
-};
-
-pub const Object = union(ObjectType) {
-    integer: Integer,
-    boolean: Boolean,
-    string: String,
-    null: Null,
-    @"return": Return,
-    @"error": Error,
-    function: Function,
+pub const Object = struct {
+    mark: bool,
+    value: Value,
 
     pub fn print(self: @This(), writer: *Writer) !void {
-        switch (self) {
-            .integer => |integer| try writer.print("{}\n", .{integer.value}),
-            .boolean => |boolean| try writer.print("{}\n", .{boolean.value}),
-            .string => |string| try writer.print("\"{s}\"\n", .{string.value}),
+        switch (self.value) {
+            .boolean => |boolean| try writer.print("{}\n", .{boolean}),
             .null => try writer.print("null\n", .{}),
-            .@"return" => |@"return"| try @"return".value.print(writer),
-            .@"error" => |@"error"| try writer.print("{}:{} {s}\n", .{ @"error".line, @"error".column, @"error".message }),
+            .integer => |integer| try writer.print("{}\n", .{integer}),
+            .string => |string| try writer.print("\"{s}\"\n", .{string}),
+            .@"return" => |@"return"| try @"return".print(writer),
+            .@"error" => |@"error"| try writer.print("{}:{} {s}\n", .{
+                @"error".line,
+                @"error".column,
+                @"error".message,
+            }),
             .function => |function| {
                 try writer.print("fn (", .{});
                 for (function.parameters, 0..) |parameter, i| {
@@ -51,34 +40,26 @@ pub const Object = union(ObjectType) {
     }
 };
 
+pub const Value = union(enum) {
+    integer: i64,
+    boolean: bool,
+    string: []const u8,
+    null: void,
+    @"return": *Object,
+    @"error": *Error,
+    function: *Function,
+};
+
 pub const Error = struct {
     line: usize,
     column: usize,
     message: []const u8,
 };
 
-pub const Return = struct {
-    value: *Object,
-};
-
-pub const Integer = struct {
-    value: i64,
-};
-
-pub const Boolean = struct {
-    value: bool,
-};
-
-pub const Null = struct {};
-
 pub const Function = struct {
     parameters: []const ast.Identifier,
     body: ast.Block,
     env: *Environment,
-};
-
-pub const String = struct {
-    value: []const u8,
 };
 
 pub const Environment = struct {
@@ -110,53 +91,21 @@ pub const Environment = struct {
 
     pub fn createObject(self: *@This()) !*Object {
         const ptr = try self.gpa.create(Object);
+        ptr.mark = false;
         try self.stack.append(self.gpa, ptr);
         return ptr;
     }
 
-    pub fn createError(self: *@This(), line: usize, column: usize, comptime format: []const u8, args: anytype) !*Object {
-        const @"error" = try self.createObject();
-        @"error".* = Object{
-            .@"error" = Error{
-                .line = line,
-                .column = column,
-                .message = try std.fmt.allocPrint(self.gpa, format, args),
-            },
-        };
-        return @"error";
-    }
-
-    fn mark(self: *@This(), marked: *AutoHashMap(*Object, void)) !void {
-        var iterator = self.bindings.iterator();
-        var entry = iterator.next();
-        while (entry != null) {
-            const ptr = entry.?.value_ptr.*;
-
-            switch (ptr.*) {
-                .boolean => {},
-                .null => {},
-                else => try marked.put(ptr, {}),
-            }
-
-            entry = iterator.next();
-        }
-
-        if (self.outer) |outer| try outer.mark(marked);
-    }
-
     pub fn markAndSweep(self: *@This(), exclude: ?*Object) !void {
-        var marked: AutoHashMap(*Object, void) = .init(self.gpa);
-        defer marked.deinit();
-
-        if (exclude) |excl| try marked.put(excl, {});
+        if (exclude) |e| e.mark = true;
 
         var iterator = self.bindings.valueIterator();
         while (iterator.next()) |entry| {
             const ptr = entry.*;
-            switch (ptr.*) {
+            switch (ptr.value) {
                 .boolean => {},
                 .null => {},
-                else => try marked.put(ptr, {}),
+                else => ptr.mark = true,
             }
         }
 
@@ -164,9 +113,12 @@ pub const Environment = struct {
         defer remove.deinit(self.gpa);
 
         for (self.stack.items, 0..) |ptr, i| {
-            if (marked.contains(ptr)) continue;
-            self.destroyObject(ptr);
-            try remove.append(self.gpa, i);
+            if (!ptr.mark) {
+                self.destroyObject(ptr);
+                try remove.append(self.gpa, i);
+            } else {
+                ptr.mark = false;
+            }
         }
 
         const removeSlice = try remove.toOwnedSlice(self.gpa);
@@ -176,24 +128,19 @@ pub const Environment = struct {
     }
 
     pub fn destroyObject(self: *@This(), ptr: *Object) void {
-        switch (ptr.*) {
-            .integer => self.gpa.destroy(ptr),
+        if (ptr.value == .null or ptr.value == .boolean) return;
+        switch (ptr.value) {
+            .integer => {},
+            .@"return" => {},
+            .string => |string| self.gpa.free(string),
             .@"error" => |@"error"| {
                 self.gpa.free(@"error".message);
-                self.gpa.destroy(ptr);
+                self.gpa.destroy(@"error");
             },
-            .function => {
-                self.gpa.destroy(ptr);
-            },
-            .@"return" => {
-                self.gpa.destroy(ptr);
-            },
-            .string => |string| {
-                self.gpa.free(string.value);
-                self.gpa.destroy(ptr);
-            },
-            else => {},
+            .function => |function| self.gpa.destroy(function),
+            else => unreachable,
         }
+        self.gpa.destroy(ptr);
     }
 
     pub fn deinit(self: *@This(), exclude: ?*Object) void {

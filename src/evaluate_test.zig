@@ -9,7 +9,7 @@ const ast = monkey.ast;
 const Scanner = monkey.scanner.Scanner;
 const Parser = monkey.parser.Parser;
 const Object = object.Object;
-const Integer = object.Integer;
+const Value = object.Value;
 const Environment = object.Environment;
 
 const ArenaAllocator = std.heap.ArenaAllocator;
@@ -54,10 +54,10 @@ test "test integers" {
 
         const result = try evaluate.evaluateProgram(program, &env);
 
-        try testing.expect(result.* == .integer);
+        try testing.expect(result.value == .integer);
 
-        switch (result.*) {
-            .integer => |integer| try testing.expectEqual(case.expect, integer.value),
+        switch (result.value) {
+            .integer => |integer| try testing.expectEqual(case.expect, integer),
             else => unreachable,
         }
     }
@@ -65,31 +65,31 @@ test "test integers" {
 
 test "test booleans" {
     const cases = [_]struct { @"test": []const u8, expect: *const object.Object }{
-        .{ .@"test" = "false", .expect = &evaluate.FALSE },
-        .{ .@"test" = "true", .expect = &evaluate.TRUE },
-        .{ .@"test" = "!true", .expect = &evaluate.FALSE },
-        .{ .@"test" = "!false", .expect = &evaluate.TRUE },
-        .{ .@"test" = "!!true", .expect = &evaluate.TRUE },
-        .{ .@"test" = "!!false", .expect = &evaluate.FALSE },
-        .{ .@"test" = "!5", .expect = &evaluate.FALSE },
-        .{ .@"test" = "!!5", .expect = &evaluate.TRUE },
-        .{ .@"test" = "10 == 10", .expect = &evaluate.TRUE },
-        .{ .@"test" = "10 == 15", .expect = &evaluate.FALSE },
-        .{ .@"test" = "10 != 10", .expect = &evaluate.FALSE },
-        .{ .@"test" = "10 != 15", .expect = &evaluate.TRUE },
-        .{ .@"test" = "10 < 15", .expect = &evaluate.TRUE },
-        .{ .@"test" = "10 > 15", .expect = &evaluate.FALSE },
-        .{ .@"test" = "15 < 10", .expect = &evaluate.FALSE },
-        .{ .@"test" = "15 > 10", .expect = &evaluate.TRUE },
-        .{ .@"test" = "true == true", .expect = &evaluate.TRUE },
-        .{ .@"test" = "false == false", .expect = &evaluate.TRUE },
-        .{ .@"test" = "true == false", .expect = &evaluate.FALSE },
-        .{ .@"test" = "true != false", .expect = &evaluate.TRUE },
-        .{ .@"test" = "true != true", .expect = &evaluate.FALSE },
-        .{ .@"test" = "(1 < 2) == true", .expect = &evaluate.TRUE },
-        .{ .@"test" = "(1 < 2) == false", .expect = &evaluate.FALSE },
-        .{ .@"test" = "(1 > 2) == true", .expect = &evaluate.FALSE },
-        .{ .@"test" = "(1 > 2) == false", .expect = &evaluate.TRUE },
+        .{ .@"test" = "false", .expect = evaluate.FALSE },
+        .{ .@"test" = "true", .expect = evaluate.TRUE },
+        .{ .@"test" = "!true", .expect = evaluate.FALSE },
+        .{ .@"test" = "!false", .expect = evaluate.TRUE },
+        .{ .@"test" = "!!true", .expect = evaluate.TRUE },
+        .{ .@"test" = "!!false", .expect = evaluate.FALSE },
+        .{ .@"test" = "!5", .expect = evaluate.FALSE },
+        .{ .@"test" = "!!5", .expect = evaluate.TRUE },
+        .{ .@"test" = "10 == 10", .expect = evaluate.TRUE },
+        .{ .@"test" = "10 == 15", .expect = evaluate.FALSE },
+        .{ .@"test" = "10 != 10", .expect = evaluate.FALSE },
+        .{ .@"test" = "10 != 15", .expect = evaluate.TRUE },
+        .{ .@"test" = "10 < 15", .expect = evaluate.TRUE },
+        .{ .@"test" = "10 > 15", .expect = evaluate.FALSE },
+        .{ .@"test" = "15 < 10", .expect = evaluate.FALSE },
+        .{ .@"test" = "15 > 10", .expect = evaluate.TRUE },
+        .{ .@"test" = "true == true", .expect = evaluate.TRUE },
+        .{ .@"test" = "false == false", .expect = evaluate.TRUE },
+        .{ .@"test" = "true == false", .expect = evaluate.FALSE },
+        .{ .@"test" = "true != false", .expect = evaluate.TRUE },
+        .{ .@"test" = "true != true", .expect = evaluate.FALSE },
+        .{ .@"test" = "(1 < 2) == true", .expect = evaluate.TRUE },
+        .{ .@"test" = "(1 < 2) == false", .expect = evaluate.FALSE },
+        .{ .@"test" = "(1 > 2) == true", .expect = evaluate.FALSE },
+        .{ .@"test" = "(1 > 2) == false", .expect = evaluate.TRUE },
     };
 
     for (cases) |case| {
@@ -107,7 +107,7 @@ test "test booleans" {
 
         const result = try evaluate.evaluateProgram(program, &env);
 
-        try testing.expect(result.* == .boolean);
+        try testing.expect(result.value == .boolean);
 
         testing.expectEqual(case.expect, result) catch |err| {
             std.debug.print("{s}\n", .{case.@"test"});
@@ -118,14 +118,14 @@ test "test booleans" {
 }
 
 test "test if expression evaluation" {
-    const cases = [_]struct { @"test": []const u8, expect: Object }{
-        .{ .@"test" = "if (true) { 10 }", .expect = Object{ .integer = Integer{ .value = 10 } } },
-        .{ .@"test" = "if (1) { 10 }", .expect = Object{ .integer = Integer{ .value = 10 } } },
-        .{ .@"test" = "if (1 < 2) { 10 }", .expect = Object{ .integer = Integer{ .value = 10 } } },
-        .{ .@"test" = "if (1 > 2) { 10 } else { 20 }", .expect = Object{ .integer = Integer{ .value = 20 } } },
-        .{ .@"test" = "if (1 < 2) { 10 } else { 20 }", .expect = Object{ .integer = Integer{ .value = 10 } } },
-        .{ .@"test" = "if (false) { 10 }", .expect = evaluate.NULL },
-        .{ .@"test" = "if (1 > 2) { 10 }", .expect = evaluate.NULL },
+    const cases = [_]struct { @"test": []const u8, expect: Value }{
+        .{ .@"test" = "if (true) { 10 }", .expect = Value{ .integer = 10 } },
+        .{ .@"test" = "if (1) { 10 }", .expect = Value{ .integer = 10 } },
+        .{ .@"test" = "if (1 < 2) { 10 }", .expect = Value{ .integer = 10 } },
+        .{ .@"test" = "if (1 > 2) { 10 } else { 20 }", .expect = Value{ .integer = 20 } },
+        .{ .@"test" = "if (1 < 2) { 10 } else { 20 }", .expect = Value{ .integer = 10 } },
+        .{ .@"test" = "if (false) { 10 }", .expect = evaluate.NULL.value },
+        .{ .@"test" = "if (1 > 2) { 10 }", .expect = evaluate.NULL.value },
     };
 
     for (cases) |case| {
@@ -143,16 +143,16 @@ test "test if expression evaluation" {
 
         const result = try evaluate.evaluateProgram(program, &env);
 
-        try testing.expectEqualDeep(case.expect, result.*);
+        try testing.expectEqual(case.expect, result.value);
     }
 }
 
 test "test return statements" {
-    const cases = [_]struct { @"test": []const u8, expect: Object }{
-        .{ .@"test" = "return 10;", .expect = Object{ .integer = Integer{ .value = 10 } } },
-        .{ .@"test" = "return 10; 9;", .expect = Object{ .integer = Integer{ .value = 10 } } },
-        .{ .@"test" = "return 2 * 5; 9;", .expect = Object{ .integer = Integer{ .value = 10 } } },
-        .{ .@"test" = "9; return 2 * 5; 9;", .expect = Object{ .integer = Integer{ .value = 10 } } },
+    const cases = [_]struct { @"test": []const u8, expect: Value }{
+        .{ .@"test" = "return 10;", .expect = Value{ .integer = 10 } },
+        .{ .@"test" = "return 10; 9;", .expect = Value{ .integer = 10 } },
+        .{ .@"test" = "return 2 * 5; 9;", .expect = Value{ .integer = 10 } },
+        .{ .@"test" = "9; return 2 * 5; 9;", .expect = Value{ .integer = 10 } },
         .{ .@"test" =
         \\if (10 > 1) {
         \\  if (10 > 1) {
@@ -161,7 +161,7 @@ test "test return statements" {
         \\
         \\  return 1;
         \\}
-        , .expect = Object{ .integer = Integer{ .value = 10 } } },
+        , .expect = Value{ .integer = 10 } },
     };
 
     for (cases) |case| {
@@ -179,7 +179,7 @@ test "test return statements" {
 
         const result = try evaluate.evaluateProgram(program, &env);
 
-        try testing.expectEqualDeep(case.expect, result.*);
+        try testing.expectEqualDeep(case.expect, result.value);
     }
 }
 
@@ -230,7 +230,7 @@ test "test error handling" {
 
         const result = try evaluate.evaluateProgram(program, &env);
 
-        switch (result.*) {
+        switch (result.value) {
             .@"error" => |@"error"| try testing.expectEqualSlices(u8, case.expect, @"error".message),
             else => try testing.expect(false),
         }
@@ -260,8 +260,8 @@ test "test let statements" {
 
         const result = try evaluate.evaluateProgram(program, &env);
 
-        switch (result.*) {
-            .integer => |integer| try testing.expectEqual(case.expect, integer.value),
+        switch (result.value) {
+            .integer => |integer| try testing.expectEqual(case.expect, integer),
             else => try testing.expect(false),
         }
     }
@@ -284,54 +284,52 @@ test "test function literals" {
 
     const result = try evaluate.evaluateProgram(program, &env);
 
-    const expected = Object{
-        .function = .{
-            .body = .{
-                .token = .{
-                    .type = .LBRACE,
-                    .line = 1,
-                    .column = 8,
-                    .literal = "{",
-                },
-                .statements = &[_]ast.Statement{
-                    ast.Statement{
-                        .expressionStatement = .{
-                            .token = .{
-                                .type = .IDENT,
-                                .line = 1,
-                                .column = 10,
-                                .literal = "x",
-                            },
-                            .expression = &ast.Expression{
-                                .infix = .{
-                                    .token = .{
-                                        .type = .PLUS,
-                                        .line = 1,
-                                        .column = 12,
-                                        .literal = "+",
-                                    },
-                                    .operator = .ADD,
-                                    .left = &ast.Expression{
-                                        .identifier = .{
-                                            .token = .{
-                                                .type = .IDENT,
-                                                .line = 1,
-                                                .column = 10,
-                                                .literal = "x",
-                                            },
-                                            .name = "x",
+    const expected = @constCast(&object.Function{
+        .body = .{
+            .token = .{
+                .type = .LBRACE,
+                .line = 1,
+                .column = 8,
+                .literal = "{",
+            },
+            .statements = &[_]ast.Statement{
+                ast.Statement{
+                    .expressionStatement = .{
+                        .token = .{
+                            .type = .IDENT,
+                            .line = 1,
+                            .column = 10,
+                            .literal = "x",
+                        },
+                        .expression = &ast.Expression{
+                            .infix = .{
+                                .token = .{
+                                    .type = .PLUS,
+                                    .line = 1,
+                                    .column = 12,
+                                    .literal = "+",
+                                },
+                                .operator = .ADD,
+                                .left = &ast.Expression{
+                                    .identifier = .{
+                                        .token = .{
+                                            .type = .IDENT,
+                                            .line = 1,
+                                            .column = 10,
+                                            .literal = "x",
                                         },
+                                        .name = "x",
                                     },
-                                    .right = &ast.Expression{
-                                        .integer = .{
-                                            .token = .{
-                                                .type = .INT,
-                                                .line = 1,
-                                                .column = 14,
-                                                .literal = "2",
-                                            },
-                                            .value = 2,
+                                },
+                                .right = &ast.Expression{
+                                    .integer = .{
+                                        .token = .{
+                                            .type = .INT,
+                                            .line = 1,
+                                            .column = 14,
+                                            .literal = "2",
                                         },
+                                        .value = 2,
                                     },
                                 },
                             },
@@ -339,24 +337,31 @@ test "test function literals" {
                     },
                 },
             },
-            .parameters = &[_]ast.Identifier{
-                ast.Identifier{
-                    .token = .{
-                        .type = .IDENT,
-                        .line = 1,
-                        .column = 5,
-                        .literal = "x",
-                    },
-                    .name = "x",
-                },
-            },
-            .env = &env,
         },
-    };
-    _ = result;
-    _ = expected;
+        .parameters = &[_]ast.Identifier{
+            ast.Identifier{
+                .token = .{
+                    .type = .IDENT,
+                    .line = 1,
+                    .column = 5,
+                    .literal = "x",
+                },
+                .name = "x",
+            },
+        },
+        .env = &env,
+    });
 
-    //try testing.expectEqualDeep(expected, result.*);
+    try testing.expect(result.value == .function);
+
+    switch (result.value) {
+        .function => |function| {
+            try testing.expectEqual(expected.env, function.env);
+            try testing.expectEqualDeep(expected.body, function.body);
+            try testing.expectEqualDeep(expected.parameters, function.parameters);
+        },
+        else => unreachable,
+    }
 }
 
 test "test function evaluation" {
@@ -384,8 +389,8 @@ test "test function evaluation" {
 
         const result = try evaluate.evaluateProgram(program, &env);
 
-        switch (result.*) {
-            .integer => |integer| try testing.expectEqual(case.expect, integer.value),
+        switch (result.value) {
+            .integer => |integer| try testing.expectEqual(case.expect, integer),
             else => try testing.expect(false),
         }
     }
