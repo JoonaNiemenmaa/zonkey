@@ -92,7 +92,6 @@ fn evaluateBlock(block: ast.Block, env: *Environment) !*Object {
         try env.markAndSweep(result);
         if (result.value == .@"return" or result.value == .@"error") return result;
     }
-    try env.markAndSweep(result);
     return result;
 }
 
