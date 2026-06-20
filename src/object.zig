@@ -10,9 +10,92 @@ const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
+pub const TRUE = &Object{
+    .refs = 1,
+    .value = Value{ .boolean = true },
+};
+
+pub const FALSE = &Object{
+    .refs = 1,
+    .value = Value{ .boolean = false },
+};
+
+pub const NULL = &Object{
+    .refs = 1,
+    .value = Value{ .null = {} },
+};
+
+pub fn toBooleanObject(boolean: bool) *Object {
+    return @constCast(if (boolean) TRUE else FALSE);
+}
+
+pub fn createObject(allocator: Allocator) !*Object {
+    const ptr = try allocator.create(Object);
+    ptr.refs = 1;
+    return ptr;
+}
+
+pub fn createStringObject(value: []const u8, allocator: Allocator) !*Object {
+    const stringObject = try createObject(allocator);
+    const string = try allocator.alloc(u8, value.len);
+    std.mem.copyForwards(u8, string, value);
+    stringObject.value = Value{ .string = string };
+    return stringObject;
+}
+
+pub fn createIntegerObject(value: i64, allocator: Allocator) !*Object {
+    const integer = try createObject(allocator);
+    integer.value = Value{ .integer = value };
+    return integer;
+}
+
+pub fn createErrorObject(
+    line: usize,
+    column: usize,
+    comptime format: []const u8,
+    args: anytype,
+    allocator: Allocator,
+) !*Object {
+    const @"error" = try createObject(allocator);
+
+    const value = try allocator.create(Error);
+
+    value.line = line;
+    value.column = column;
+    value.message = try std.fmt.allocPrint(allocator, format, args);
+
+    @"error".value = Value{ .@"error" = value };
+    return @"error";
+}
+
 pub const Object = struct {
-    mark: bool,
+    refs: usize,
     value: Value,
+
+    pub fn inc(self: *@This()) void {
+        self.refs += 1;
+    }
+
+    pub fn dec(self: *@This(), allocator: Allocator) void {
+        if (self.refs > 0) self.refs -= 1;
+        if (self.refs == 0) self.destroy(allocator);
+    }
+
+    pub fn destroy(self: *@This(), allocator: Allocator) void {
+        if (self.value == .null or self.value == .boolean) return;
+        switch (self.value) {
+            .integer => {},
+            .@"return" => {},
+            .string => |string| allocator.free(string),
+            .@"error" => |@"error"| {
+                allocator.free(@"error".message);
+                allocator.destroy(@"error");
+            },
+            .function => |function| allocator.destroy(function),
+            else => unreachable,
+        }
+        allocator.destroy(self);
+    }
 
     pub fn print(self: @This(), writer: *Writer) !void {
         switch (self.value) {
@@ -64,91 +147,39 @@ pub const Function = struct {
 
 pub const Environment = struct {
     bindings: StringHashMap(*Object),
-    stack: ArrayList(?*Object),
-    gpa: Allocator,
+    allocator: Allocator,
     outer: ?*Environment,
 
     pub fn init(allocator: Allocator, outer: ?*Environment) @This() {
         return @This(){
             .bindings = .init(allocator),
-            .stack = .empty,
             .outer = outer,
-            .gpa = allocator,
+            .allocator = allocator,
         };
     }
 
     pub fn put(self: *@This(), key: []const u8, obj: *Object) !void {
+        if (self.bindings.get(key)) |value| {
+            if (value != obj) {
+                value.dec(self.allocator);
+            }
+        }
         try self.bindings.put(key, obj);
+        obj.inc();
     }
 
     pub fn get(self: *@This(), key: []const u8) !?*Object {
         if (self.bindings.get(key)) |value| {
+            value.inc();
             return value;
         } else {
             if (self.outer) |outer| return try outer.get(key) else return null;
         }
     }
 
-    pub fn createObject(self: *@This()) !*Object {
-        const ptr = try self.gpa.create(Object);
-        ptr.mark = false;
-        try self.stack.append(self.gpa, ptr);
-        return ptr;
-    }
-
-    pub fn markAndSweep(self: *@This(), exclude: ?*Object) !void {
-        if (exclude) |e| e.mark = true;
-
-        var iterator = self.bindings.valueIterator();
-        while (iterator.next()) |entry| {
-            const ptr = entry.*;
-            switch (ptr.value) {
-                .boolean => {},
-                .null => {},
-                else => ptr.mark = true,
-            }
-        }
-
-        for (self.stack.items, 0..) |ptr, i| {
-            if (ptr) |obj| {
-                if (!obj.mark) {
-                    self.destroyObject(obj);
-                    self.stack.items[i] = null;
-                } else {
-                    obj.mark = false;
-                }
-            }
-        }
-    }
-
-    pub fn destroyObject(self: *@This(), ptr: *Object) void {
-        if (ptr.value == .null or ptr.value == .boolean) return;
-        switch (ptr.value) {
-            .integer => {},
-            .@"return" => {},
-            .string => |string| self.gpa.free(string),
-            .@"error" => |@"error"| {
-                self.gpa.free(@"error".message);
-                self.gpa.destroy(@"error");
-            },
-            .function => |function| self.gpa.destroy(function),
-            else => unreachable,
-        }
-        self.gpa.destroy(ptr);
-    }
-
-    pub fn deinit(self: *@This(), exclude: ?*Object) void {
-        self.bindings.clearAndFree();
-
-        if (exclude) |e| e.mark = true;
-
-        for (self.stack.items) |ptr| {
-            if (ptr) |obj| {
-                if (!obj.mark) self.destroyObject(obj);
-            }
-        }
-
-        self.stack.deinit(self.gpa);
+    pub fn deinit(self: *@This()) void {
+        var i = self.bindings.valueIterator();
+        while (i.next()) |value| value.*.dec(self.allocator);
         self.bindings.deinit();
     }
 };

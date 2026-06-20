@@ -14,64 +14,31 @@ const testing = std.testing;
 const Scanner = monkey.scanner.Scanner;
 const Parser = monkey.parser.Parser;
 
-pub const TRUE = &Object{
-    .mark = false,
-    .value = Value{ .boolean = true },
-};
+const TRUE = object.TRUE;
+const FALSE = object.FALSE;
+const NULL = object.NULL;
 
-pub const FALSE = &Object{
-    .mark = false,
-    .value = Value{ .boolean = false },
-};
-
-pub const NULL = &Object{
-    .mark = false,
-    .value = Value{ .null = {} },
-};
-
-fn toBooleanObject(boolean: bool) *Object {
-    return @constCast(if (boolean) TRUE else FALSE);
-}
-
-fn createStringObject(value: []const u8, env: *Environment) !*Object {
-    const stringObject = try env.createObject();
-    const string = try env.gpa.alloc(u8, value.len);
-    std.mem.copyForwards(u8, string, value);
-    stringObject.value = Value{ .string = string };
-    return stringObject;
-}
-
-fn createIntegerObject(value: i64, env: *Environment) !*Object {
-    const integer = try env.createObject();
-    integer.value = Value{ .integer = value };
-    return integer;
-}
-
-pub fn createErrorObject(line: usize, column: usize, comptime format: []const u8, args: anytype, env: *Environment) !*Object {
-    const @"error" = try env.createObject();
-
-    const value = try env.gpa.create(object.Error);
-
-    value.line = line;
-    value.column = column;
-    value.message = try std.fmt.allocPrint(env.gpa, format, args);
-
-    @"error".value = Value{ .@"error" = value };
-    return @"error";
-}
+const createObject = object.createObject;
+const createIntegerObject = object.createIntegerObject;
+const createStringObject = object.createStringObject;
+const createErrorObject = object.createErrorObject;
+const toBooleanObject = object.toBooleanObject;
 
 pub fn evaluateProgram(program: ast.Program, env: *Environment) !*Object {
-    var result: *Object = @constCast(NULL);
-    for (program.statements) |statement| {
+    var result: *Object = @constCast(object.NULL);
+    for (program.statements, 1..) |statement, i| {
         result = try evaluateStatement(statement, env);
 
-        try env.markAndSweep(result);
-
         switch (result.value) {
-            .@"return" => |value| return value,
+            .@"return" => |value| {
+                result.dec(env.allocator);
+                return value;
+            },
             .@"error" => return result,
             else => {},
         }
+
+        if (i < program.statements.len) result.dec(env.allocator);
     }
     return result;
 }
@@ -87,16 +54,16 @@ fn evaluateStatement(statement: ast.Statement, env: *Environment) Allocator.Erro
 
 fn evaluateBlock(block: ast.Block, env: *Environment) !*Object {
     var result: *Object = @constCast(NULL);
-    for (block.statements) |statement| {
+    for (block.statements, 1..) |statement, i| {
         result = try evaluateStatement(statement, env);
-        try env.markAndSweep(result);
         if (result.value == .@"return" or result.value == .@"error") return result;
+        if (i < block.statements.len) result.dec(env.allocator);
     }
     return result;
 }
 
 fn evaluateReturn(statement: ast.ReturnStatement, env: *Environment) !*Object {
-    const result = try env.createObject();
+    const result = try createObject(env.allocator);
     result.value = Value{ .@"return" = try evaluateExpression(statement.expression.*, env) };
     return result;
 }
@@ -111,26 +78,27 @@ fn evaluateLet(statement: ast.LetStatement, env: *Environment) !*Object {
 fn evaluateExpression(expression: ast.Expression, env: *Environment) Allocator.Error!*Object {
     return switch (expression) {
         .identifier => |identifier| evaluateIdentifier(identifier, env),
-        .integer => |integer| evaluateInteger(integer, env),
+        .integer => |integer| createIntegerObject(integer.value, env.allocator),
         .boolean => |boolean| toBooleanObject(boolean.value),
-        .string => |string| evaluateString(string, env),
-        .prefix => |prefix| try evaluatePrefix(prefix, env),
-        .infix => |infix| try evaluateInfix(infix, env),
-        .@"if" => |@"if"| try evaluateIf(@"if", env),
-        .function => |function| try evaluateFunction(function, env),
-        .call => |call| try evaluateCall(call, env),
+        .string => |string| createStringObject(string.value, env.allocator),
+        .prefix => |prefix| evaluatePrefix(prefix, env),
+        .infix => |infix| evaluateInfix(infix, env),
+        .@"if" => |@"if"| evaluateIf(@"if", env),
+        .function => |function| evaluateFunction(function, env),
+        .call => |call| evaluateCall(call, env),
     };
 }
 
 fn evaluateCall(call: ast.Call, env: *Environment) !*Object {
     const expression = try evaluateExpression(call.function.*, env);
+    defer expression.dec(env.allocator);
 
     const function = switch (expression.value) {
         .function => |function| function,
         .@"error" => return expression,
         else => |value| return createErrorObject(call.token.line, call.token.column, "cannot call {s}", .{
             @tagName(value),
-        }, env),
+        }, env.allocator),
     };
 
     if (function.parameters.len != call.arguments.len) return createErrorObject(
@@ -138,46 +106,42 @@ fn evaluateCall(call: ast.Call, env: *Environment) !*Object {
         call.token.column,
         "function call provided {} arguments instead of {}",
         .{ call.arguments.len, function.parameters.len },
-        env,
+        env.allocator,
     );
 
     const arguments = try evaluateArguments(call.arguments, env);
-    defer env.gpa.free(arguments);
+    defer env.allocator.free(arguments);
 
-    var innerEnv: Environment = .init(env.gpa, function.env);
+    var innerEnv: Environment = .init(env.allocator, function.env);
+    defer innerEnv.deinit();
 
     for (function.parameters, arguments) |parameter, argument| {
-        if (argument.value == .@"error") {
-            innerEnv.deinit(null);
-            return argument;
-        }
+        if (argument.value == .@"error") return argument;
         try innerEnv.put(parameter.name, argument);
+        argument.dec(env.allocator);
     }
 
     const result = try evaluateBlock(function.body, &innerEnv);
 
-    const returnObject = switch (result.value) {
-        .@"return" => |@"return"| @"return",
-        else => result,
-    };
-
-    defer innerEnv.deinit(returnObject);
-
-    if (std.mem.find(*Object, arguments, &[_]*Object{returnObject}) == null) try env.stack.append(env.gpa, returnObject);
-
-    return returnObject;
+    switch (result.value) {
+        .@"return" => |@"return"| {
+            result.dec(env.allocator);
+            return @"return";
+        },
+        else => return result,
+    }
 }
 
 fn evaluateArguments(arguments: []*const ast.Expression, env: *Environment) ![]*Object {
     var evaluatedArguments: ArrayList(*Object) = .empty;
-    errdefer evaluatedArguments.deinit(env.gpa);
+    errdefer evaluatedArguments.deinit(env.allocator);
 
     for (arguments) |argument| {
         const evaluated = try evaluateExpression(argument.*, env);
-        try evaluatedArguments.append(env.gpa, evaluated);
+        try evaluatedArguments.append(env.allocator, evaluated);
     }
 
-    return try evaluatedArguments.toOwnedSlice(env.gpa);
+    return try evaluatedArguments.toOwnedSlice(env.allocator);
 }
 
 fn evaluateIf(@"if": ast.If, env: *Environment) !*Object {
@@ -185,10 +149,12 @@ fn evaluateIf(@"if": ast.If, env: *Environment) !*Object {
 
     if (condition.value == .@"error") return condition;
 
-    if (condition != NULL and condition != FALSE) {
+    defer condition.dec(env.allocator);
+
+    if (condition != object.NULL and condition != object.FALSE) {
         return try evaluateBlock(@"if".consequence, env);
     } else {
-        return if (@"if".alternative) |alternative| try evaluateBlock(alternative, env) else @constCast(NULL);
+        return if (@"if".alternative) |alternative| try evaluateBlock(alternative, env) else @constCast(object.NULL);
     }
 }
 
@@ -202,6 +168,7 @@ fn evaluatePrefix(prefix: ast.Prefix, env: *Environment) !*Object {
 }
 
 fn evaluatePrefixBang(token: monkey.token.Token, operand: *Object, env: *Environment) !*Object {
+    defer operand.dec(env.allocator);
     return switch (operand.value) {
         .boolean => |boolean| toBooleanObject(!boolean),
         .null => toBooleanObject(true),
@@ -214,7 +181,7 @@ fn evaluatePrefixBang(token: monkey.token.Token, operand: *Object, env: *Environ
                 token.literal,
                 @tagName(operand.value),
             },
-            env,
+            env.allocator,
         ),
     };
 }
@@ -233,7 +200,7 @@ fn evaluatePrefixMinus(token: monkey.token.Token, operand: *Object, env: *Enviro
                 token.literal,
                 @tagName(operand.value),
             },
-            env,
+            env.allocator,
         ),
     };
 }
@@ -241,9 +208,11 @@ fn evaluatePrefixMinus(token: monkey.token.Token, operand: *Object, env: *Enviro
 fn evaluateInfix(infix: ast.Infix, env: *Environment) !*Object {
     const left = try evaluateExpression(@constCast(infix.left).*, env);
     if (left.value == .@"error") return left;
+    defer left.dec(env.allocator);
 
     const right = try evaluateExpression(@constCast(infix.right).*, env);
     if (right.value == .@"error") return right;
+    defer right.dec(env.allocator);
 
     if (left.value == .integer and right.value == .integer) {
         return evaluateIntegerInfix(left, infix.operator, right, env);
@@ -260,7 +229,7 @@ fn evaluateInfix(infix: ast.Infix, env: *Environment) !*Object {
                     infix.token.literal,
                     @tagName(right.value),
                 },
-                env,
+                env.allocator,
             ),
         };
     } else if (left.value == .string and right.value == .string) {
@@ -276,7 +245,7 @@ fn evaluateInfix(infix: ast.Infix, env: *Environment) !*Object {
             infix.token.literal,
             @tagName(right.value),
         },
-        env,
+        env.allocator,
     );
 }
 
@@ -293,10 +262,10 @@ fn evaluateStringInfix(left: *Object, infix: ast.Infix, right: *Object, env: *En
 
     return switch (infix.operator) {
         .ADD => {
-            const result = try env.createObject();
+            const result = try createObject(env.allocator);
 
             result.value = Value{
-                .string = try std.mem.concat(env.gpa, u8, &.{ leftString, rightString }),
+                .string = try std.mem.concat(env.allocator, u8, &.{ leftString, rightString }),
             };
 
             return result;
@@ -310,7 +279,7 @@ fn evaluateStringInfix(left: *Object, infix: ast.Infix, right: *Object, env: *En
                 infix.token.literal,
                 @tagName(right.value),
             },
-            env,
+            env.allocator,
         ),
     };
 }
@@ -327,10 +296,10 @@ fn evaluateIntegerInfix(left: *Object, operator: ast.InfixOperator, right: *Obje
     };
 
     const result = switch (operator) {
-        .ADD => try createIntegerObject(leftInteger + rightInteger, env),
-        .SUBTRACT => try createIntegerObject(leftInteger - rightInteger, env),
-        .MULTIPLY => try createIntegerObject(leftInteger * rightInteger, env),
-        .DIVIDE => try createIntegerObject(@divFloor(leftInteger, rightInteger), env),
+        .ADD => try createIntegerObject(leftInteger + rightInteger, env.allocator),
+        .SUBTRACT => try createIntegerObject(leftInteger - rightInteger, env.allocator),
+        .MULTIPLY => try createIntegerObject(leftInteger * rightInteger, env.allocator),
+        .DIVIDE => try createIntegerObject(@divFloor(leftInteger, rightInteger), env.allocator),
 
         .EQUALS => toBooleanObject(leftInteger == rightInteger),
         .NOT_EQUALS => toBooleanObject(leftInteger != rightInteger),
@@ -342,9 +311,9 @@ fn evaluateIntegerInfix(left: *Object, operator: ast.InfixOperator, right: *Obje
 }
 
 fn evaluateFunction(function: ast.Function, env: *Environment) !*Object {
-    const functionObject = try env.createObject();
+    const functionObject = try createObject(env.allocator);
 
-    const value = try env.gpa.create(object.Function);
+    const value = try env.allocator.create(object.Function);
 
     value.body = function.body;
     value.parameters = function.parameters;
@@ -360,22 +329,8 @@ fn evaluateIdentifier(identifier: ast.Identifier, env: *Environment) !*Object {
         identifier.token.column,
         "identifier not found: {s}",
         .{identifier.name},
-        env,
+        env.allocator,
     );
-}
-
-fn evaluateInteger(integer: ast.Integer, env: *Environment) !*Object {
-    const integerObject = try env.createObject();
-    integerObject.value = Value{ .integer = integer.value };
-    return integerObject;
-}
-
-fn evaluateString(string: ast.String, env: *Environment) !*Object {
-    const stringObject = try env.createObject();
-    const value = try env.gpa.alloc(u8, string.value.len);
-    std.mem.copyForwards(u8, value, string.value);
-    stringObject.value = Value{ .string = value };
-    return stringObject;
 }
 
 test "test integers" {
@@ -410,7 +365,7 @@ test "test integers" {
         var env: Environment = .init(std.testing.allocator, null);
 
         defer {
-            env.deinit(null);
+            env.deinit();
             parserArena.deinit();
         }
 
@@ -424,6 +379,8 @@ test "test integers" {
             .integer => |integer| try testing.expectEqual(case.expect, integer),
             else => unreachable,
         }
+
+        result.dec(env.allocator);
     }
 }
 
@@ -463,7 +420,7 @@ test "test booleans" {
         var env: Environment = .init(std.testing.allocator, null);
 
         defer {
-            env.deinit(null);
+            env.deinit();
             parserArena.deinit();
         }
 
@@ -478,6 +435,8 @@ test "test booleans" {
             std.debug.print("{} != {}\n", .{ case.expect.*, result.* });
             return err;
         };
+
+        result.dec(env.allocator);
     }
 }
 
@@ -499,7 +458,7 @@ test "test if expression evaluation" {
         var env: Environment = .init(std.testing.allocator, null);
 
         defer {
-            env.deinit(null);
+            env.deinit();
             parserArena.deinit();
         }
 
@@ -508,6 +467,8 @@ test "test if expression evaluation" {
         const result = try evaluateProgram(program, &env);
 
         try testing.expectEqual(case.expect, result.value);
+
+        result.dec(env.allocator);
     }
 }
 
@@ -535,7 +496,7 @@ test "test return statements" {
         var env: Environment = .init(std.testing.allocator, null);
 
         defer {
-            env.deinit(null);
+            env.deinit();
             parserArena.deinit();
         }
 
@@ -544,6 +505,8 @@ test "test return statements" {
         const result = try evaluateProgram(program, &env);
 
         try testing.expectEqualDeep(case.expect, result.value);
+
+        result.dec(env.allocator);
     }
 }
 
@@ -586,7 +549,7 @@ test "test error handling" {
         var env: Environment = .init(std.testing.allocator, null);
 
         defer {
-            env.deinit(null);
+            env.deinit();
             parserArena.deinit();
         }
 
@@ -598,6 +561,8 @@ test "test error handling" {
             .@"error" => |@"error"| try testing.expectEqualSlices(u8, case.expect, @"error".message),
             else => try testing.expect(false),
         }
+
+        result.dec(env.allocator);
     }
 }
 
@@ -606,7 +571,7 @@ test "test let statements" {
         .{ .@"test" = "let a = 5; a;", .expect = 5 },
         .{ .@"test" = "let a = 5 * 5; a;", .expect = 25 },
         .{ .@"test" = "let a = 5; let b = a; b;", .expect = 5 },
-        .{ .@"test" = "let a = 5; let b = a; let c = a + b + 5; c;", .expect = 15 },
+        .{ .@"test" = "let a = 5; let a = 10; a;", .expect = 10 },
     };
 
     for (cases) |case| {
@@ -616,7 +581,7 @@ test "test let statements" {
         var env: Environment = .init(std.testing.allocator, null);
 
         defer {
-            env.deinit(null);
+            env.deinit();
             parserArena.deinit();
         }
 
@@ -628,6 +593,8 @@ test "test let statements" {
             .integer => |integer| try testing.expectEqual(case.expect, integer),
             else => try testing.expect(false),
         }
+
+        result.dec(env.allocator);
     }
 }
 
@@ -640,7 +607,7 @@ test "test function literals" {
     var env: Environment = .init(std.testing.allocator, null);
 
     defer {
-        env.deinit(null);
+        env.deinit();
         parserArena.deinit();
     }
 
@@ -726,6 +693,8 @@ test "test function literals" {
         },
         else => unreachable,
     }
+
+    result.dec(env.allocator);
 }
 
 test "test function evaluation" {
@@ -745,7 +714,7 @@ test "test function evaluation" {
         var env: Environment = .init(std.testing.allocator, null);
 
         defer {
-            env.deinit(null);
+            env.deinit();
             parserArena.deinit();
         }
 
@@ -757,5 +726,7 @@ test "test function evaluation" {
             .integer => |integer| try testing.expectEqual(case.expect, integer),
             else => try testing.expect(false),
         }
+
+        result.dec(env.allocator);
     }
 }
