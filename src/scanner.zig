@@ -113,9 +113,15 @@ pub const Scanner = struct {
             '<' => token = self.createToken(TokenType.LESS_THAN, "<"),
             '>' => token = self.createToken(TokenType.GREATER_THAN, ">"),
             '"' => {
+                token.type = .STRING;
+                token.line = self.line;
+                token.column = self.column;
+
                 self.nextChar();
+
                 const string = self.readString();
-                token = self.createToken(TokenType.STRING, string);
+
+                token.literal = string;
             },
             '!' => {
                 if (self.getAhead() == '=') {
@@ -156,52 +162,62 @@ pub const Scanner = struct {
 };
 
 test "test one character tokens" {
-    const cases = [_]Token{ Token{
-        .type = TokenType.LBRACKET,
-        .literal = "[",
-        .line = 1,
-        .column = 2,
-    }, Token{
-        .type = TokenType.RBRACKET,
-        .literal = "]",
-        .line = 1,
-        .column = 4,
-    }, Token{
-        .type = TokenType.LBRACE,
-        .literal = "{",
-        .line = 1,
-        .column = 5,
-    }, Token{
-        .type = TokenType.RBRACE,
-        .literal = "}",
-        .line = 1,
-        .column = 7,
-    }, Token{
-        .type = TokenType.LPAREN,
-        .literal = "(",
-        .line = 1,
-        .column = 10,
-    }, Token{
-        .type = TokenType.RPAREN,
-        .literal = ")",
-        .line = 1,
-        .column = 13,
-    }, Token{
-        .type = TokenType.SEMICOLON,
-        .literal = ";",
-        .line = 2,
-        .column = 2,
-    }, Token{
-        .type = TokenType.SEMICOLON,
-        .literal = ";",
-        .line = 2,
-        .column = 3,
-    }, Token{
-        .type = TokenType.EOF,
-        .literal = "",
-        .line = 2,
-        .column = 4,
-    } };
+    const cases = [_]Token{
+        Token{
+            .type = TokenType.LBRACKET,
+            .literal = "[",
+            .line = 1,
+            .column = 2,
+        },
+        Token{
+            .type = TokenType.RBRACKET,
+            .literal = "]",
+            .line = 1,
+            .column = 4,
+        },
+        Token{
+            .type = TokenType.LBRACE,
+            .literal = "{",
+            .line = 1,
+            .column = 5,
+        },
+        Token{
+            .type = TokenType.RBRACE,
+            .literal = "}",
+            .line = 1,
+            .column = 7,
+        },
+        Token{
+            .type = TokenType.LPAREN,
+            .literal = "(",
+            .line = 1,
+            .column = 10,
+        },
+        Token{
+            .type = TokenType.RPAREN,
+            .literal = ")",
+            .line = 1,
+            .column = 13,
+        },
+        Token{
+            .type = TokenType.SEMICOLON,
+            .literal = ";",
+            .line = 2,
+            .column = 2,
+        },
+        Token{
+            .type = TokenType.SEMICOLON,
+            .literal = ";",
+            .line = 2,
+            .column = 3,
+        },
+        Token{
+            .type = TokenType.EOF,
+            .literal = "",
+            .line = 2,
+            .column = 4,
+        },
+    };
 
     var scanner = Scanner.init(
         \\ [ ]{ }  (  )
@@ -218,22 +234,26 @@ test "test one character tokens" {
 }
 
 test "test two character tokens" {
-    const cases = [_]Token{ Token{
-        .type = TokenType.EQUALS,
-        .literal = "==",
-        .line = 1,
-        .column = 1,
-    }, Token{
-        .type = TokenType.NOT_EQUALS,
-        .literal = "!=",
-        .line = 2,
-        .column = 3,
-    }, Token{
-        .type = TokenType.EOF,
-        .literal = "",
-        .line = 2,
-        .column = 5,
-    } };
+    const cases = [_]Token{
+        Token{
+            .type = TokenType.EQUALS,
+            .literal = "==",
+            .line = 1,
+            .column = 1,
+        },
+        Token{
+            .type = TokenType.NOT_EQUALS,
+            .literal = "!=",
+            .line = 2,
+            .column = 3,
+        },
+        Token{
+            .type = TokenType.EOF,
+            .literal = "",
+            .line = 2,
+            .column = 5,
+        },
+    };
 
     var scanner = Scanner.init(
         \\==
@@ -250,7 +270,6 @@ test "test two character tokens" {
 }
 
 test "test long tokens" {
-
     const cases = [_]Token{
         Token{
             .type = .IDENT,
@@ -276,12 +295,19 @@ test "test long tokens" {
             .line = 3,
             .column = 1,
         },
+        Token{
+            .type = .STRING,
+            .literal = "olen ilkeä vampyyrivelho",
+            .line = 4,
+            .column = 1,
+        },
     };
 
     var scanner = Scanner.init(
         \\joona
         \\  if   true
         \\800
+        \\"olen ilkeä vampyyrivelho"
     );
 
     for (cases) |case| {
@@ -291,5 +317,4 @@ test "test long tokens" {
 
     const token = scanner.nextToken();
     try std.testing.expect(token.type == TokenType.EOF);
-
 }
