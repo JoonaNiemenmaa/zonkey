@@ -142,7 +142,7 @@ pub const Object = struct {
             .integer => |integer| try writer.print("{}\n", .{integer}),
             .string => |string| try writer.print("\"{s}\"\n", .{string}),
             .@"return" => |@"return"| try @"return".print(writer),
-            .@"error" => |@"error"| try writer.print("{}:{} {s}\n", .{
+            .@"error" => |@"error"| try writer.print("ERROR: {}:{} {s}\n", .{
                 @"error".line,
                 @"error".column,
                 @"error".message,
