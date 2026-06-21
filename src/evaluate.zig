@@ -10,7 +10,6 @@ const ArrayList = std.ArrayList;
 const Environment = object.Environment;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
-const testing = std.testing;
 const Scanner = monkey.scanner.Scanner;
 const Parser = monkey.parser.Parser;
 
@@ -95,6 +94,16 @@ fn evaluateCall(call: ast.Call, env: *Environment) !*Object {
 
     const function = switch (expression.value) {
         .function => |function| function,
+        .builtin => |builtin| {
+            const arguments = try evaluateArguments(call.arguments, env);
+            defer env.allocator.free(arguments);
+
+            const result = try builtin(arguments, call.token, env);
+
+            for (arguments) |argument| argument.dec(env.allocator);
+
+            return result;
+        },
         .@"error" => return expression,
         else => |value| return createErrorObject(call.token.line, call.token.column, "cannot call {s}", .{
             @tagName(value),
@@ -324,7 +333,11 @@ fn evaluateFunction(function: ast.Function, env: *Environment) !*Object {
 }
 
 fn evaluateIdentifier(identifier: ast.Identifier, env: *Environment) !*Object {
-    return if (try env.get(identifier.name)) |value| value else try createErrorObject(
+    if (try env.get(identifier.name)) |value| return value;
+
+    if (object.builtins.get(identifier.name)) |builtin| return @constCast(builtin);
+
+    return try createErrorObject(
         identifier.token.line,
         identifier.token.column,
         "identifier not found: {s}",
@@ -333,7 +346,29 @@ fn evaluateIdentifier(identifier: ast.Identifier, env: *Environment) !*Object {
     );
 }
 
-test "test integers" {
+fn evaluateTestCase(input: []const u8) !*Object {
+    var scanner: Scanner = .init(input);
+
+    var arena: ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser: Parser = .init(arena.allocator(), &scanner);
+
+    const program = try parser.parseProgram();
+
+    var env: Environment = .init(std.testing.allocator, null);
+    defer env.deinit();
+
+    return try evaluateProgram(program, &env);
+}
+
+fn expectObject(expected: *const Object, case: []const u8) !void {
+    const result = try evaluateTestCase(case);
+    defer result.dec(std.testing.allocator);
+    try std.testing.expectEqualDeep(expected, result);
+}
+
+test "integer evaluation" {
     const cases = [_]struct { @"test": []const u8, expect: i64 }{
         .{ .@"test" = "5", .expect = 5 },
         .{ .@"test" = "12", .expect = 12 },
@@ -359,32 +394,20 @@ test "test integers" {
     };
 
     for (cases) |case| {
-        var scanner: Scanner = .init(case.@"test");
-        var parserArena: ArenaAllocator = .init(testing.allocator);
-        var parser: Parser = .init(parserArena.allocator(), &scanner);
-        var env: Environment = .init(std.testing.allocator, null);
+        const result = try evaluateTestCase(case.@"test");
 
-        defer {
-            env.deinit();
-            parserArena.deinit();
-        }
-
-        const program = try parser.parseProgram();
-
-        const result = try evaluateProgram(program, &env);
-
-        try testing.expect(result.value == .integer);
+        try std.testing.expect(result.value == .integer);
 
         switch (result.value) {
-            .integer => |integer| try testing.expectEqual(case.expect, integer),
+            .integer => |integer| try std.testing.expectEqual(case.expect, integer),
             else => unreachable,
         }
 
-        result.dec(env.allocator);
+        result.dec(std.testing.allocator);
     }
 }
 
-test "test booleans" {
+test "boolean evaluation" {
     const cases = [_]struct { @"test": []const u8, expect: *const object.Object }{
         .{ .@"test" = "false", .expect = FALSE },
         .{ .@"test" = "true", .expect = TRUE },
@@ -414,29 +437,17 @@ test "test booleans" {
     };
 
     for (cases) |case| {
-        var scanner: Scanner = .init(case.@"test");
-        var parserArena: ArenaAllocator = .init(testing.allocator);
-        var parser: Parser = .init(parserArena.allocator(), &scanner);
-        var env: Environment = .init(std.testing.allocator, null);
+        const result = try evaluateTestCase(case.@"test");
 
-        defer {
-            env.deinit();
-            parserArena.deinit();
-        }
+        try std.testing.expect(result.value == .boolean);
 
-        const program = try parser.parseProgram();
-
-        const result = try evaluateProgram(program, &env);
-
-        try testing.expect(result.value == .boolean);
-
-        testing.expectEqual(case.expect, result) catch |err| {
+        std.testing.expectEqual(case.expect, result) catch |err| {
             std.debug.print("{s}\n", .{case.@"test"});
             std.debug.print("{} != {}\n", .{ case.expect.*, result.* });
             return err;
         };
 
-        result.dec(env.allocator);
+        result.dec(std.testing.allocator);
     }
 }
 
@@ -452,23 +463,11 @@ test "test if expression evaluation" {
     };
 
     for (cases) |case| {
-        var scanner: Scanner = .init(case.@"test");
-        var parserArena: ArenaAllocator = .init(testing.allocator);
-        var parser: Parser = .init(parserArena.allocator(), &scanner);
-        var env: Environment = .init(std.testing.allocator, null);
+        const result = try evaluateTestCase(case.@"test");
 
-        defer {
-            env.deinit();
-            parserArena.deinit();
-        }
+        try std.testing.expectEqual(case.expect, result.value);
 
-        const program = try parser.parseProgram();
-
-        const result = try evaluateProgram(program, &env);
-
-        try testing.expectEqual(case.expect, result.value);
-
-        result.dec(env.allocator);
+        result.dec(std.testing.allocator);
     }
 }
 
@@ -490,23 +489,11 @@ test "test return statements" {
     };
 
     for (cases) |case| {
-        var scanner: Scanner = .init(case.@"test");
-        var parserArena: ArenaAllocator = .init(testing.allocator);
-        var parser: Parser = .init(parserArena.allocator(), &scanner);
-        var env: Environment = .init(std.testing.allocator, null);
+        const result = try evaluateTestCase(case.@"test");
 
-        defer {
-            env.deinit();
-            parserArena.deinit();
-        }
+        try std.testing.expectEqualDeep(case.expect, result.value);
 
-        const program = try parser.parseProgram();
-
-        const result = try evaluateProgram(program, &env);
-
-        try testing.expectEqualDeep(case.expect, result.value);
-
-        result.dec(env.allocator);
+        result.dec(std.testing.allocator);
     }
 }
 
@@ -543,26 +530,14 @@ test "test error handling" {
     };
 
     for (cases) |case| {
-        var scanner: Scanner = .init(case.@"test");
-        var parserArena: ArenaAllocator = .init(testing.allocator);
-        var parser: Parser = .init(parserArena.allocator(), &scanner);
-        var env: Environment = .init(std.testing.allocator, null);
-
-        defer {
-            env.deinit();
-            parserArena.deinit();
-        }
-
-        const program = try parser.parseProgram();
-
-        const result = try evaluateProgram(program, &env);
+        const result = try evaluateTestCase(case.@"test");
 
         switch (result.value) {
-            .@"error" => |@"error"| try testing.expectEqualSlices(u8, case.expect, @"error".message),
-            else => try testing.expect(false),
+            .@"error" => |@"error"| try std.testing.expectEqualSlices(u8, case.expect, @"error".message),
+            else => try std.testing.expect(false),
         }
 
-        result.dec(env.allocator);
+        result.dec(std.testing.allocator);
     }
 }
 
@@ -575,43 +550,29 @@ test "test let statements" {
     };
 
     for (cases) |case| {
-        var scanner: Scanner = .init(case.@"test");
-        var parserArena: ArenaAllocator = .init(testing.allocator);
-        var parser: Parser = .init(parserArena.allocator(), &scanner);
-        var env: Environment = .init(std.testing.allocator, null);
-
-        defer {
-            env.deinit();
-            parserArena.deinit();
-        }
-
-        const program = try parser.parseProgram();
-
-        const result = try evaluateProgram(program, &env);
+        const result = try evaluateTestCase(case.@"test");
 
         switch (result.value) {
-            .integer => |integer| try testing.expectEqual(case.expect, integer),
-            else => try testing.expect(false),
+            .integer => |integer| try std.testing.expectEqual(case.expect, integer),
+            else => try std.testing.expect(false),
         }
 
-        result.dec(env.allocator);
+        result.dec(std.testing.allocator);
     }
 }
 
 test "test function literals" {
-    const input = "fn (x) { x + 2; }";
+    var scanner: Scanner = .init("fn (x) { x + 2 }");
 
-    var scanner: Scanner = .init(input);
-    var parserArena: ArenaAllocator = .init(testing.allocator);
-    var parser: Parser = .init(parserArena.allocator(), &scanner);
-    var env: Environment = .init(std.testing.allocator, null);
+    var arena: ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
 
-    defer {
-        env.deinit();
-        parserArena.deinit();
-    }
+    var parser: Parser = .init(arena.allocator(), &scanner);
 
     const program = try parser.parseProgram();
+
+    var env: Environment = .init(std.testing.allocator, null);
+    defer env.deinit();
 
     const result = try evaluateProgram(program, &env);
 
@@ -683,18 +644,18 @@ test "test function literals" {
         .env = &env,
     });
 
-    try testing.expect(result.value == .function);
+    try std.testing.expect(result.value == .function);
 
     switch (result.value) {
         .function => |function| {
-            try testing.expectEqual(expected.env, function.env);
-            try testing.expectEqualDeep(expected.body, function.body);
-            try testing.expectEqualDeep(expected.parameters, function.parameters);
+            try std.testing.expectEqual(expected.env, function.env);
+            try std.testing.expectEqualDeep(expected.body, function.body);
+            try std.testing.expectEqualDeep(expected.parameters, function.parameters);
         },
         else => unreachable,
     }
 
-    result.dec(env.allocator);
+    result.dec(std.testing.allocator);
 }
 
 test "test function evaluation" {
@@ -708,58 +669,58 @@ test "test function evaluation" {
     };
 
     for (cases) |case| {
-        var scanner: Scanner = .init(case.@"test");
-        var parserArena: ArenaAllocator = .init(testing.allocator);
-        var parser: Parser = .init(parserArena.allocator(), &scanner);
-        var env: Environment = .init(std.testing.allocator, null);
-
-        defer {
-            env.deinit();
-            parserArena.deinit();
-        }
-
-        const program = try parser.parseProgram();
-
-        const result = try evaluateProgram(program, &env);
+        const result = try evaluateTestCase(case.@"test");
 
         switch (result.value) {
-            .integer => |integer| try testing.expectEqual(case.expect, integer),
-            else => try testing.expect(false),
+            .integer => |integer| try std.testing.expectEqual(case.expect, integer),
+            else => try std.testing.expect(false),
         }
 
-        result.dec(env.allocator);
+        result.dec(std.testing.allocator);
     }
 }
 
 test "string evaluation" {
-    var scanner: Scanner = .init(
+    try expectObject(&Object{ .refs = 1, .value = .{ .string = "OLEN PARAS" } },
         \\"OLEN PARAS"
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .string = "MITÄ HONGYUAN TARVITSEE?" } },
         \\"MITÄ" + " " + "HONGYUAN" + " " + "TARVITSEE?"
     );
+}
 
-    var arena: ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-
-    var parser: Parser = .init(arena.allocator(), &scanner);
-
-    const program = try parser.parseProgram();
-
-    var env: Environment = .init(std.testing.allocator, null);
-    defer env.deinit();
-
-    var result = try evaluateStatement(program.statements[0], &env);
-    defer result.dec(std.testing.allocator);
-
-    try std.testing.expectEqualDeep(
-        &Object{ .refs = 1, .value = .{ .string = "OLEN PARAS" } },
-        result,
+test "builtin len function" {
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 0 } },
+        \\len("");
     );
-
-    result.dec(std.testing.allocator);
-
-    result = try evaluateStatement(program.statements[1], &env);
-    try std.testing.expectEqualDeep(
-        &Object{ .refs = 1, .value = .{ .string = "MITÄ HONGYUAN TARVITSEE?" } },
-        result,
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 4 } },
+        \\len("four");
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 11 } },
+        \\len("hello world");
+    );
+    try expectObject(&Object{
+        .refs = 1,
+        .value = .{
+            .@"error" = @constCast(&object.Error{
+                .column = 4,
+                .line = 1,
+                .message = "argument to 'len' not supported, got integer",
+            }),
+        },
+    },
+        \\len(1);
+    );
+    try expectObject(&Object{
+        .refs = 1,
+        .value = .{
+            .@"error" = @constCast(&object.Error{
+                .column = 4,
+                .line = 1,
+                .message = "function call provided 2 arguments instead of 1",
+            }),
+        },
+    },
+        \\len("one", "two");
     );
 }

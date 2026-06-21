@@ -9,6 +9,8 @@ const AutoHashMap = std.AutoHashMap;
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
+const StaticStringMap = std.StaticStringMap;
+const Token = monkey.token.Token;
 
 pub const TRUE = &Object{
     .refs = 1,
@@ -24,6 +26,41 @@ pub const NULL = &Object{
     .refs = 1,
     .value = Value{ .null = {} },
 };
+
+const LEN_ARGS = 1;
+
+fn len(args: []*Object, token: Token, env: *Environment) Allocator.Error!*Object {
+    if (args.len != LEN_ARGS) return createErrorObject(
+        token.line,
+        token.column,
+        "function call provided {} arguments instead of {}",
+        .{ args.len, LEN_ARGS },
+        env.allocator,
+    );
+
+    const obj = args[0];
+
+    return switch (obj.value) {
+        .string => |string| return createIntegerObject(@intCast(string.len), env.allocator),
+        else => try createErrorObject(
+            token.line,
+            token.column,
+            "argument to 'len' not supported, got {s}",
+            .{@tagName(obj.value)},
+            env.allocator,
+        ),
+    };
+}
+
+pub const builtins: StaticStringMap(*const Object) = .initComptime(.{
+    .{
+        "len",
+        &Object{
+            .refs = 1,
+            .value = .{ .builtin = &len },
+        },
+    },
+});
 
 pub fn toBooleanObject(boolean: bool) *Object {
     return @constCast(if (boolean) TRUE else FALSE);
@@ -82,8 +119,10 @@ pub const Object = struct {
     }
 
     pub fn destroy(self: *@This(), allocator: Allocator) void {
-        if (self.value == .null or self.value == .boolean) return;
         switch (self.value) {
+            .null => return,
+            .boolean => return,
+            .builtin => return,
             .integer => {},
             .@"return" => {},
             .string => |string| allocator.free(string),
@@ -92,7 +131,6 @@ pub const Object = struct {
                 allocator.destroy(@"error");
             },
             .function => |function| allocator.destroy(function),
-            else => unreachable,
         }
         allocator.destroy(self);
     }
@@ -119,6 +157,7 @@ pub const Object = struct {
                 try function.body.print(writer);
                 try writer.print("\n", .{});
             },
+            .builtin => |builtin| try writer.print("BUILTIN: {}\n", .{builtin}),
         }
     }
 };
@@ -131,6 +170,7 @@ pub const Value = union(enum) {
     @"return": *Object,
     @"error": *Error,
     function: *Function,
+    builtin: *const fn ([]*Object, Token, *Environment) Allocator.Error!*Object,
 };
 
 pub const Error = struct {

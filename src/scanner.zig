@@ -122,6 +122,8 @@ pub const Scanner = struct {
                 const string = self.readString();
 
                 token.literal = string;
+
+                return token;
             },
             '!' => {
                 if (self.getAhead() == '=') {
