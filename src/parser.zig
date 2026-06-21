@@ -1147,3 +1147,42 @@ test "test call expressions" {
         try std.testing.expectEqualDeep(case, statement);
     }
 }
+
+test "test string literals" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    var scanner: Scanner = .init(
+        \\"olen suuri ja mahtava kevin"
+    );
+
+    var parser: Parser = .init(allocator, &scanner);
+
+    const program: ast.Program = try parser.parseProgram();
+
+    try std.testing.expectEqual(1, program.statements.len);
+
+    try std.testing.expectEqualDeep(ast.Statement{
+        .expressionStatement = .{
+            .token = .{
+                .type = .STRING,
+                .literal = "olen suuri ja mahtava kevin",
+                .column = 1,
+                .line = 1,
+            },
+            .expression = &ast.Expression{
+                .string = .{
+                    .token = .{
+                        .type = .STRING,
+                        .literal = "olen suuri ja mahtava kevin",
+                        .column = 1,
+                        .line = 1,
+                    },
+                    .value = "olen suuri ja mahtava kevin",
+                },
+            },
+        },
+    }, program.statements[0]);
+}

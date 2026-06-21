@@ -730,3 +730,36 @@ test "test function evaluation" {
         result.dec(env.allocator);
     }
 }
+
+test "string evaluation" {
+    var scanner: Scanner = .init(
+        \\"OLEN PARAS"
+        \\"MITÄ" + " " + "HONGYUAN" + " " + "TARVITSEE?"
+    );
+
+    var arena: ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+
+    var parser: Parser = .init(arena.allocator(), &scanner);
+
+    const program = try parser.parseProgram();
+
+    var env: Environment = .init(std.testing.allocator, null);
+    defer env.deinit();
+
+    var result = try evaluateStatement(program.statements[0], &env);
+    defer result.dec(std.testing.allocator);
+
+    try std.testing.expectEqualDeep(
+        &Object{ .refs = 1, .value = .{ .string = "OLEN PARAS" } },
+        result,
+    );
+
+    result.dec(std.testing.allocator);
+
+    result = try evaluateStatement(program.statements[1], &env);
+    try std.testing.expectEqualDeep(
+        &Object{ .refs = 1, .value = .{ .string = "MITÄ HONGYUAN TARVITSEE?" } },
+        result,
+    );
+}
