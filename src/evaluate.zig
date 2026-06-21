@@ -85,12 +85,12 @@ fn evaluateExpression(expression: ast.Expression, env: *Environment) Allocator.E
         .@"if" => |@"if"| evaluateIf(@"if", env),
         .function => |function| evaluateFunction(function, env),
         .call => |call| evaluateCall(call, env),
+        .array => @constCast(NULL),
     };
 }
 
 fn evaluateCall(call: ast.Call, env: *Environment) !*Object {
     const expression = try evaluateExpression(call.function.*, env);
-    defer expression.dec(env.allocator);
 
     const function = switch (expression.value) {
         .function => |function| function,
@@ -102,6 +102,8 @@ fn evaluateCall(call: ast.Call, env: *Environment) !*Object {
 
             for (arguments) |argument| argument.dec(env.allocator);
 
+            expression.dec(env.allocator);
+
             return result;
         },
         .@"error" => return expression,
@@ -109,6 +111,8 @@ fn evaluateCall(call: ast.Call, env: *Environment) !*Object {
             @tagName(value),
         }, env.allocator),
     };
+
+    defer expression.dec(env.allocator);
 
     if (function.parameters.len != call.arguments.len) return createErrorObject(
         call.token.line,

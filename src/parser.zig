@@ -56,7 +56,12 @@ pub const Parser = struct {
             self.nextToken();
             return true;
         } else {
-            try self.appendError("{}:{} Unexpected token of type '{}' found when '{}' was expected.", .{ self.ahead.line, self.ahead.column, self.ahead.type, expect });
+            try self.appendError("{}:{} Unexpected token of type '{}' found when '{}' was expected.", .{
+                self.ahead.line,
+                self.ahead.column,
+                self.ahead.type,
+                expect,
+            });
             return false;
         }
     }
@@ -112,7 +117,12 @@ pub const Parser = struct {
         }
 
         if (!self.currentTokenIs(.RPAREN)) {
-            try self.appendError("{}:{} Unexpected token of type '{}' found when '{}' was expected.", .{ self.current.line, self.current.column, self.current.type, TokenType.RPAREN });
+            try self.appendError("{}:{} Unexpected token of type '{}' found when '{}' was expected.", .{
+                self.current.line,
+                self.current.column,
+                self.current.type,
+                TokenType.RPAREN,
+            });
             return null;
         }
 
@@ -161,7 +171,14 @@ pub const Parser = struct {
 
         self.nextToken();
 
-        const expression = try self.parseExpression(.PREFIX) orelse return null;
+        const expression = try self.parseExpression(.PREFIX) orelse {
+            try self.appendError("{}:{} Unexpected token of type '{}' found when expression was expected.", .{
+                self.current.line,
+                self.current.column,
+                self.current.type,
+            });
+            return null;
+        };
 
         return ast.Prefix{
             .token = token,
@@ -170,33 +187,59 @@ pub const Parser = struct {
         };
     }
 
+    fn parseExpressions(self: *@This()) Allocator.Error![]*const ast.Expression {
+        var expressions: ArrayList(*const ast.Expression) = .empty;
+        errdefer expressions.deinit(self.allocator);
+
+        while (try self.parseExpression(.LOWEST)) |expression| {
+            try expressions.append(self.allocator, expression);
+            self.nextToken();
+            if (!self.currentTokenIs(.COMMA)) break;
+            self.nextToken();
+        }
+
+        return try expressions.toOwnedSlice(self.allocator);
+    }
+
     fn parseCall(self: *@This(), function: *ast.Expression) Allocator.Error!?ast.Expression {
         const token = self.current;
 
-        var arguments: ArrayList(*const ast.Expression) = .empty;
-        errdefer arguments.deinit(self.allocator);
+        self.nextToken();
 
-        if (!self.aheadTokenIs(.RPAREN)) {
-            self.nextToken();
+        const arguments = try self.parseExpressions();
 
-            var argument = try self.parseExpression(.LOWEST) orelse return null;
-            try arguments.append(self.allocator, argument);
-
-            while (self.aheadTokenIs(.COMMA)) {
-                self.nextToken();
-                self.nextToken();
-                argument = try self.parseExpression(.LOWEST) orelse return null;
-                try arguments.append(self.allocator, argument);
-            }
+        if (!self.currentTokenIs(.RPAREN)) {
+            self.allocator.free(arguments);
+            return null;
         }
 
-        if (!try self.expectAhead(.RPAREN)) return null;
+        return ast.Expression{
+            .call = .{
+                .token = token,
+                .function = function,
+                .arguments = arguments,
+            },
+        };
+    }
 
-        return ast.Expression{ .call = .{
-            .token = token,
-            .function = function,
-            .arguments = try arguments.toOwnedSlice(self.allocator),
-        } };
+    fn parseArray(self: *@This()) Allocator.Error!?ast.Expression {
+        const token = self.current;
+
+        self.nextToken();
+
+        const items = try self.parseExpressions();
+
+        if (!self.currentTokenIs(.RBRACKET)) {
+            self.allocator.free(items);
+            return null;
+        }
+
+        return ast.Expression{
+            .array = .{
+                .token = token,
+                .items = items,
+            },
+        };
     }
 
     fn parseInfix(self: *@This(), left: *ast.Expression) Allocator.Error!?ast.Expression {
@@ -206,7 +249,14 @@ pub const Parser = struct {
 
         self.nextToken();
 
-        const right = try self.parseExpression(getPrecedence(token.type)) orelse return null;
+        const right = try self.parseExpression(getPrecedence(token.type)) orelse {
+            try self.appendError("{}:{} Unexpected token of type '{}' found when expression was expected.", .{
+                self.current.line,
+                self.current.column,
+                self.current.type,
+            });
+            return null;
+        };
 
         return ast.Expression{ .infix = .{
             .token = token,
@@ -279,14 +329,10 @@ pub const Parser = struct {
             .MINUS => ast.Expression{ .prefix = try self.parsePrefix(ast.PrefixOperator.MINUS) orelse return null },
             .BANG => ast.Expression{ .prefix = try self.parsePrefix(ast.PrefixOperator.NOT) orelse return null },
             .LPAREN => (try self.parseGroupedExpression() orelse return null).*,
+            .LBRACKET => try self.parseArray() orelse return null,
             .IF => ast.Expression{ .@"if" = try self.parseIf() orelse return null },
             .FN => ast.Expression{ .function = try self.parseFunction() orelse return null },
             else => {
-                try self.appendError("{}:{} Unexpected token of type '{}' found when expression was expected.", .{
-                    self.current.line,
-                    self.current.column,
-                    self.current.type,
-                });
                 return null;
             },
         };
@@ -323,7 +369,14 @@ pub const Parser = struct {
 
         self.nextToken();
 
-        const expression = try self.parseExpression(Precedence.LOWEST) orelse return null;
+        const expression = try self.parseExpression(Precedence.LOWEST) orelse {
+            try self.appendError("{}:{} Unexpected token of type '{}' found when expression was expected.", .{
+                self.current.line,
+                self.current.column,
+                self.current.type,
+            });
+            return null;
+        };
 
         if (self.aheadTokenIs(TokenType.SEMICOLON)) self.nextToken();
 
@@ -339,7 +392,14 @@ pub const Parser = struct {
 
         self.nextToken();
 
-        const expression = try self.parseExpression(Precedence.LOWEST) orelse return null;
+        const expression = try self.parseExpression(Precedence.LOWEST) orelse {
+            try self.appendError("{}:{} Unexpected token of type '{}' found when expression was expected.", .{
+                self.current.line,
+                self.current.column,
+                self.current.type,
+            });
+            return null;
+        };
 
         if (self.aheadTokenIs(TokenType.SEMICOLON)) self.nextToken();
 
@@ -351,7 +411,14 @@ pub const Parser = struct {
 
     fn parseExpressionStatement(self: *@This()) !?ast.ExpressionStatement {
         const token = self.current;
-        const expression = try self.parseExpression(Precedence.LOWEST) orelse return null;
+        const expression = try self.parseExpression(Precedence.LOWEST) orelse {
+            try self.appendError("{}:{} Unexpected token of type '{}' found when expression was expected.", .{
+                self.current.line,
+                self.current.column,
+                self.current.type,
+            });
+            return null;
+        };
 
         if (self.aheadTokenIs(TokenType.SEMICOLON)) self.nextToken();
 
@@ -1122,7 +1189,126 @@ test "test parsing function literals" {
 }
 
 test "test call expressions" {
-    const cases = [_]ast.Statement{ ast.Statement{ .expressionStatement = .{ .token = .{ .type = .IDENT, .literal = "foo", .line = 1, .column = 1 }, .expression = &ast.Expression{ .call = .{ .token = .{ .type = .LPAREN, .literal = "(", .line = 1, .column = 4 }, .function = &ast.Expression{ .identifier = .{ .token = .{ .type = .IDENT, .literal = "foo", .line = 1, .column = 1 }, .name = "foo" } }, .arguments = @as([]*const ast.Expression, &[_]*const ast.Expression{}) } } } }, ast.Statement{ .expressionStatement = .{ .token = .{ .type = .IDENT, .literal = "foo", .line = 2, .column = 1 }, .expression = &ast.Expression{ .call = .{ .token = .{ .type = .LPAREN, .literal = "(", .line = 2, .column = 4 }, .function = &ast.Expression{ .identifier = .{ .token = .{ .type = .IDENT, .literal = "foo", .line = 2, .column = 1 }, .name = "foo" } }, .arguments = @constCast(&[_]*const ast.Expression{&ast.Expression{ .integer = .{ .token = .{ .type = .INT, .literal = "5", .line = 2, .column = 5 }, .value = 5 } }}) } } } }, ast.Statement{ .expressionStatement = .{ .token = .{ .type = .IDENT, .literal = "foo", .line = 3, .column = 1 }, .expression = &ast.Expression{ .call = .{ .token = .{ .type = .LPAREN, .literal = "(", .line = 3, .column = 4 }, .function = &ast.Expression{ .identifier = .{ .token = .{ .type = .IDENT, .literal = "foo", .line = 3, .column = 1 }, .name = "foo" } }, .arguments = @constCast(&[_]*const ast.Expression{ &ast.Expression{ .integer = .{ .token = .{ .type = .INT, .literal = "5", .line = 3, .column = 5 }, .value = 5 } }, &ast.Expression{ .integer = .{ .token = .{ .type = .INT, .literal = "10", .line = 3, .column = 8 }, .value = 10 } } }) } } } } };
+    const cases = [_]ast.Statement{
+        ast.Statement{
+            .expressionStatement = .{
+                .token = .{
+                    .type = .IDENT,
+                    .literal = "foo",
+                    .line = 1,
+                    .column = 1,
+                },
+                .expression = &ast.Expression{
+                    .call = .{
+                        .token = .{
+                            .type = .LPAREN,
+                            .literal = "(",
+                            .line = 1,
+                            .column = 4,
+                        },
+                        .function = &ast.Expression{
+                            .identifier = .{ .token = .{
+                                .type = .IDENT,
+                                .literal = "foo",
+                                .line = 1,
+                                .column = 1,
+                            }, .name = "foo" },
+                        },
+                        .arguments = @as([]*const ast.Expression, &[_]*const ast.Expression{}),
+                    },
+                },
+            },
+        },
+        ast.Statement{
+            .expressionStatement = .{
+                .token = .{
+                    .type = .IDENT,
+                    .literal = "foo",
+                    .line = 2,
+                    .column = 1,
+                },
+                .expression = &ast.Expression{
+                    .call = .{ .token = .{
+                        .type = .LPAREN,
+                        .literal = "(",
+                        .line = 2,
+                        .column = 4,
+                    }, .function = &ast.Expression{ .identifier = .{
+                        .token = .{
+                            .type = .IDENT,
+                            .literal = "foo",
+                            .line = 2,
+                            .column = 1,
+                        },
+                        .name = "foo",
+                    } }, .arguments = @constCast(
+                        &[_]*const ast.Expression{
+                            &ast.Expression{
+                                .integer = .{
+                                    .token = .{
+                                        .type = .INT,
+                                        .literal = "5",
+                                        .line = 2,
+                                        .column = 5,
+                                    },
+                                    .value = 5,
+                                },
+                            },
+                        },
+                    ) },
+                },
+            },
+        },
+        ast.Statement{
+            .expressionStatement = .{
+                .token = .{
+                    .type = .IDENT,
+                    .literal = "foo",
+                    .line = 3,
+                    .column = 1,
+                },
+                .expression = &ast.Expression{
+                    .call = .{
+                        .token = .{
+                            .type = .LPAREN,
+                            .literal = "(",
+                            .line = 3,
+                            .column = 4,
+                        },
+                        .function = &ast.Expression{
+                            .identifier = .{ .token = .{
+                                .type = .IDENT,
+                                .literal = "foo",
+                                .line = 3,
+                                .column = 1,
+                            }, .name = "foo" },
+                        },
+                        .arguments = @constCast(&[_]*const ast.Expression{
+                            &ast.Expression{
+                                .integer = .{ .token = .{
+                                    .type = .INT,
+                                    .literal = "5",
+                                    .line = 3,
+                                    .column = 5,
+                                }, .value = 5 },
+                            },
+                            &ast.Expression{
+                                .integer = .{
+                                    .token = .{
+                                        .type = .INT,
+                                        .literal = "10",
+                                        .line = 3,
+                                        .column = 8,
+                                    },
+                                    .value = 10,
+                                },
+                            },
+                        }),
+                    },
+                },
+            },
+        },
+    };
 
     const input =
         \\foo()
@@ -1185,4 +1371,128 @@ test "test string literals" {
             },
         },
     }, program.statements[0]);
+}
+
+test "test parsing arrays" {
+    const input =
+        \\[];
+        \\[1];
+        \\[1, 2, 3];
+        \\[1, "hello", true, foo];
+    ;
+
+    const cases = [_]ast.Statement{
+        ast.Statement{
+            .expressionStatement = .{
+                .token = .{ .type = .LBRACKET, .literal = "[", .line = 1, .column = 1 },
+                .expression = &ast.Expression{
+                    .array = .{
+                        .token = .{ .type = .LBRACKET, .literal = "[", .line = 1, .column = 1 },
+                        .items = @as([]*const ast.Expression, &[_]*const ast.Expression{}),
+                    },
+                },
+            },
+        },
+        ast.Statement{
+            .expressionStatement = .{
+                .token = .{ .type = .LBRACKET, .literal = "[", .line = 2, .column = 1 },
+                .expression = &ast.Expression{
+                    .array = .{
+                        .token = .{ .type = .LBRACKET, .literal = "[", .line = 2, .column = 1 },
+                        .items = @constCast(&[_]*const ast.Expression{
+                            &ast.Expression{
+                                .integer = .{
+                                    .token = .{ .type = .INT, .literal = "1", .line = 2, .column = 2 },
+                                    .value = 1,
+                                },
+                            },
+                        }),
+                    },
+                },
+            },
+        },
+        ast.Statement{
+            .expressionStatement = .{
+                .token = .{ .type = .LBRACKET, .literal = "[", .line = 3, .column = 1 },
+                .expression = &ast.Expression{
+                    .array = .{
+                        .token = .{ .type = .LBRACKET, .literal = "[", .line = 3, .column = 1 },
+                        .items = @constCast(&[_]*const ast.Expression{
+                            &ast.Expression{
+                                .integer = .{
+                                    .token = .{ .type = .INT, .literal = "1", .line = 3, .column = 2 },
+                                    .value = 1,
+                                },
+                            },
+                            &ast.Expression{
+                                .integer = .{
+                                    .token = .{ .type = .INT, .literal = "2", .line = 3, .column = 5 },
+                                    .value = 2,
+                                },
+                            },
+                            &ast.Expression{
+                                .integer = .{
+                                    .token = .{ .type = .INT, .literal = "3", .line = 3, .column = 8 },
+                                    .value = 3,
+                                },
+                            },
+                        }),
+                    },
+                },
+            },
+        },
+        ast.Statement{
+            .expressionStatement = .{
+                .token = .{ .type = .LBRACKET, .literal = "[", .line = 4, .column = 1 },
+                .expression = &ast.Expression{
+                    .array = .{
+                        .token = .{ .type = .LBRACKET, .literal = "[", .line = 4, .column = 1 },
+                        .items = @constCast(&[_]*const ast.Expression{
+                            &ast.Expression{
+                                .integer = .{
+                                    .token = .{ .type = .INT, .literal = "1", .line = 4, .column = 2 },
+                                    .value = 1,
+                                },
+                            },
+                            &ast.Expression{
+                                .string = .{
+                                    .token = .{ .type = .STRING, .literal = "hello", .line = 4, .column = 5 },
+                                    .value = "hello",
+                                },
+                            },
+                            &ast.Expression{
+                                .boolean = .{
+                                    .token = .{ .type = .TRUE, .literal = "true", .line = 4, .column = 14 },
+                                    .value = true,
+                                },
+                            },
+                            &ast.Expression{
+                                .identifier = .{
+                                    .token = .{ .type = .IDENT, .literal = "foo", .line = 4, .column = 20 },
+                                    .name = "foo",
+                                },
+                            },
+                        }),
+                    },
+                },
+            },
+        },
+    };
+
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    var scanner: Scanner = .init(input);
+
+    var parser: Parser = .init(allocator, &scanner);
+
+    const program: ast.Program = try parser.parseProgram();
+
+    try std.testing.expectEqual(cases.len, program.statements.len);
+
+    for (program.statements, cases) |statement, case| {
+        try std.testing.expectEqualDeep(case, statement);
+    }
 }

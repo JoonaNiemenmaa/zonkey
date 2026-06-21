@@ -98,6 +98,7 @@ pub const Expression = union(enum) {
     @"if": If,
     function: Function,
     call: Call,
+    array: Array,
 
     pub fn print(self: @This(), writer: *Writer) Writer.Error!void {
         return switch (self) {
@@ -171,6 +172,20 @@ pub const Call = struct {
             if (i < self.arguments.len) try writer.print(", ", .{});
         }
         try writer.print(")", .{});
+    }
+};
+
+pub const Array = struct {
+    token: Token,
+    items: []*const Expression,
+
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try writer.print("[", .{});
+        for (self.items, 1..) |argument, i| {
+            try argument.print(writer);
+            if (i < self.items.len) try writer.print(", ", .{});
+        }
+        try writer.print("]", .{});
     }
 };
 

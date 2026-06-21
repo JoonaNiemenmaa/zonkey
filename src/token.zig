@@ -9,7 +9,9 @@ pub const TokenType = enum {
     RBRACE,
     LBRACKET,
     RBRACKET,
+
     SEMICOLON,
+    COMMA,
     PLUS,
     MINUS,
     ASTERISK,
@@ -20,7 +22,7 @@ pub const TokenType = enum {
     NOT_EQUALS,
     ASSIGN,
     BANG,
-    COMMA,
+
     TRUE,
     FALSE,
     LET,
@@ -28,9 +30,11 @@ pub const TokenType = enum {
     IF,
     ELSE,
     FN,
+
     IDENT,
     INT,
     STRING,
+
     EOF,
     ILLEGAL,
 };
