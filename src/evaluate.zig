@@ -21,6 +21,7 @@ const createObject = object.createObject;
 const createIntegerObject = object.createIntegerObject;
 const createStringObject = object.createStringObject;
 const createErrorObject = object.createErrorObject;
+const createArrayObject = object.createArrayObject;
 const toBooleanObject = object.toBooleanObject;
 
 pub fn evaluateProgram(program: ast.Program, env: *Environment) !*Object {
@@ -85,25 +86,94 @@ fn evaluateExpression(expression: ast.Expression, env: *Environment) Allocator.E
         .@"if" => |@"if"| evaluateIf(@"if", env),
         .function => |function| evaluateFunction(function, env),
         .call => |call| evaluateCall(call, env),
-        .array => @constCast(NULL),
+        .array => |array| evaluateArray(array, env),
+        .access => |access| evaluateAccess(access, env),
     };
 }
 
+fn evaluateArray(literal: ast.Array, env: *Environment) !*Object {
+    const objects = try env.allocator.alloc(*Object, literal.items.len);
+    errdefer env.allocator.free(objects);
+
+    for (literal.items, 0..) |item, i| {
+        const result = try evaluateExpression(item.*, env);
+
+        if (result.value == .@"error") {
+            for (objects[0..i]) |obj| obj.dec(env.allocator);
+            env.allocator.free(objects);
+            return result;
+        }
+
+        objects[i] = result;
+    }
+
+    const array = createArrayObject(objects, env.allocator);
+
+    return array;
+}
+
+fn evaluateAccess(access: ast.Access, env: *Environment) !*Object {
+    const collection = try evaluateExpression(access.collection.*, env);
+    defer collection.dec(env.allocator);
+
+    if (collection.value == .@"error") return collection;
+
+    switch (collection.value) {
+        .array => |array| {
+            const index = try evaluateExpression(access.index.*, env);
+            defer index.dec(env.allocator);
+
+            if (index.value == .@"error") return index;
+
+            switch (index.value) {
+                .integer => |integer| {
+                    if (integer >= 0 and integer < array.items.len) {
+                        const obj = array.items[@intCast(integer)];
+                        obj.inc();
+                        return obj;
+                    }
+
+                    return createErrorObject(
+                        access.token.line,
+                        access.token.column,
+                        "access out of bounds",
+                        .{},
+                        env.allocator,
+                    );
+                },
+                else => |value| return createErrorObject(
+                    access.token.line,
+                    access.token.column,
+                    "array index must integer, not {s}",
+                    .{@tagName(value)},
+                    env.allocator,
+                ),
+            }
+        },
+        else => |value| return createErrorObject(
+            access.token.line,
+            access.token.column,
+            "{s} object is not indexable",
+            .{@tagName(value)},
+            env.allocator,
+        ),
+    }
+}
+
 fn evaluateCall(call: ast.Call, env: *Environment) !*Object {
+    const arguments = try env.allocator.alloc(*Object, call.arguments.len);
+    defer env.allocator.free(arguments);
+
+    for (call.arguments, 0..) |argument, i| arguments[i] = try evaluateExpression(argument.*, env);
+
     const expression = try evaluateExpression(call.function.*, env);
 
     const function = switch (expression.value) {
         .function => |function| function,
         .builtin => |builtin| {
-            const arguments = try evaluateArguments(call.arguments, env);
-            defer env.allocator.free(arguments);
-
             const result = try builtin(arguments, call.token, env);
-
             for (arguments) |argument| argument.dec(env.allocator);
-
             expression.dec(env.allocator);
-
             return result;
         },
         .@"error" => return expression,
@@ -121,9 +191,6 @@ fn evaluateCall(call: ast.Call, env: *Environment) !*Object {
         .{ call.arguments.len, function.parameters.len },
         env.allocator,
     );
-
-    const arguments = try evaluateArguments(call.arguments, env);
-    defer env.allocator.free(arguments);
 
     var innerEnv: Environment = .init(env.allocator, function.env);
     defer innerEnv.deinit();
@@ -143,18 +210,6 @@ fn evaluateCall(call: ast.Call, env: *Environment) !*Object {
         },
         else => return result,
     }
-}
-
-fn evaluateArguments(arguments: []*const ast.Expression, env: *Environment) ![]*Object {
-    var evaluatedArguments: ArrayList(*Object) = .empty;
-    errdefer evaluatedArguments.deinit(env.allocator);
-
-    for (arguments) |argument| {
-        const evaluated = try evaluateExpression(argument.*, env);
-        try evaluatedArguments.append(env.allocator, evaluated);
-    }
-
-    return try evaluatedArguments.toOwnedSlice(env.allocator);
 }
 
 fn evaluateIf(@"if": ast.If, env: *Environment) !*Object {
@@ -726,5 +781,155 @@ test "builtin len function" {
         },
     },
         \\len("one", "two");
+    );
+}
+
+test "array evaluation" {
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 1 } },
+        \\[1, 2, 3][0];
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 2 } },
+        \\[1, 2, 3][1];
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 3 } },
+        \\[1, 2, 3][2];
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .string = "hello" } },
+        \\["hello", "world"][0];
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .boolean = true } },
+        \\[true, false][0];
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .boolean = false } },
+        \\[true, false][1];
+    );
+    try expectObject(&Object{
+        .refs = 1,
+        .value = .{
+            .@"error" = @constCast(&object.Error{
+                .column = 10,
+                .line = 1,
+                .message = "access out of bounds",
+            }),
+        },
+    },
+        \\[1, 2, 3][4];
+    );
+    try expectObject(&Object{
+        .refs = 1,
+        .value = .{
+            .@"error" = @constCast(&object.Error{
+                .column = 3,
+                .line = 1,
+                .message = "access out of bounds",
+            }),
+        },
+    },
+        \\[][0];
+    );
+    try expectObject(&Object{
+        .refs = 1,
+        .value = .{
+            .@"error" = @constCast(&object.Error{
+                .column = 4,
+                .line = 1,
+                .message = "array index must integer, not string",
+            }),
+        },
+    },
+        \\[1]["hello"];
+    );
+    try expectObject(&Object{
+        .refs = 1,
+        .value = .{
+            .@"error" = @constCast(&object.Error{
+                .column = 2,
+                .line = 1,
+                .message = "integer object is not indexable",
+            }),
+        },
+    },
+        \\1[0];
+    );
+}
+
+test "array builtin functions" {
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 3 } },
+        \\len([1, 2, 3]);
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 0 } },
+        \\len([]);
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 1 } },
+        \\first([1, 2, 3]);
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .string = "hello" } },
+        \\first(["hello"]);
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .null = {} } },
+        \\first([]);
+    );
+    try expectObject(&Object{
+        .refs = 1,
+        .value = .{
+            .@"error" = @constCast(&object.Error{
+                .column = 6,
+                .line = 1,
+                .message = "argument to 'first' not supported, got integer",
+            }),
+        },
+    },
+        \\first(1);
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 2 } },
+        \\len(rest([1, 2, 3]));
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 2 } },
+        \\rest([1, 2, 3])[0];
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 0 } },
+        \\len(rest([1]));
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 0 } },
+        \\len(rest([]));
+    );
+    try expectObject(&Object{
+        .refs = 1,
+        .value = .{
+            .@"error" = @constCast(&object.Error{
+                .column = 5,
+                .line = 1,
+                .message = "argument to 'rest' not supported, got integer",
+            }),
+        },
+    },
+        \\rest(1);
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 2 } },
+        \\let a = [1];
+        \\push(a, 2);
+        \\a[1];
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 2 } },
+        \\let a = [1];
+        \\push(a, 2);
+        \\len(a);
+    );
+    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 1 } },
+        \\let a = [1];
+        \\push(a, 2);
+        \\a[0];
+    );
+    try expectObject(&Object{
+        .refs = 1,
+        .value = .{
+            .@"error" = @constCast(&object.Error{
+                .column = 5,
+                .line = 1,
+                .message = "argument to 'push' not supported, got integer",
+            }),
+        },
+    },
+        \\push(1, 2);
     );
 }

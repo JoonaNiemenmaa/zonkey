@@ -10,8 +10,6 @@ const Token = monkey.token.Token;
 const TokenType = monkey.token.TokenType;
 const Writer = std.Io.Writer;
 
-const print = std.debug.print;
-
 pub const Parser = struct {
     allocator: Allocator,
     scanner: *Scanner,
@@ -222,6 +220,31 @@ pub const Parser = struct {
         };
     }
 
+    fn parseAccess(self: *@This(), collection: *ast.Expression) Allocator.Error!?ast.Expression {
+        const token = self.current;
+
+        self.nextToken();
+
+        const index = try self.parseExpression(.LOWEST) orelse {
+            try self.appendError("{}:{} Unexpected token of type '{}' found when expression was expected.", .{
+                self.current.line,
+                self.current.column,
+                self.current.type,
+            });
+            return null;
+        };
+
+        if (!try self.expectAhead(.RBRACKET)) return null;
+
+        return ast.Expression{
+            .access = .{
+                .token = token,
+                .collection = collection,
+                .index = index,
+            },
+        };
+    }
+
     fn parseArray(self: *@This()) Allocator.Error!?ast.Expression {
         const token = self.current;
 
@@ -269,7 +292,9 @@ pub const Parser = struct {
     fn parseGroupedExpression(self: *@This()) !?*ast.Expression {
         self.nextToken();
 
-        const expression = try self.parseExpression(.LOWEST) orelse return null;
+        const expression = try self.parseExpression(.LOWEST) orelse {
+            return null;
+        };
 
         if (!try self.expectAhead(TokenType.RPAREN)) return null;
 
@@ -284,6 +309,7 @@ pub const Parser = struct {
         PRODUCT,
         PREFIX,
         CALL,
+        ACCESS,
     };
 
     fn getPrecedence(@"type": TokenType) Precedence {
@@ -296,6 +322,7 @@ pub const Parser = struct {
             .NOT_EQUALS => Precedence.EQUALS,
             .LESS_THAN => Precedence.LESSGREATER,
             .GREATER_THAN => Precedence.LESSGREATER,
+            .LBRACKET => Precedence.ACCESS,
             .LPAREN => Precedence.CALL,
             else => Precedence.LOWEST,
         };
@@ -311,6 +338,7 @@ pub const Parser = struct {
             .NOT_EQUALS => &parseInfix,
             .LESS_THAN => &parseInfix,
             .GREATER_THAN => &parseInfix,
+            .LBRACKET => &parseAccess,
             .LPAREN => &parseCall,
             else => unreachable,
         };
@@ -631,6 +659,14 @@ test "test precedence" {
         .{
             .@"test" = "add(a + b + c * d / f + g)",
             .expect = "add((((a + b) + ((c * d) / f)) + g));\n",
+        },
+        .{
+            .@"test" = "a * [1, 2, 3, 4][b * c] * d",
+            .expect = "((a * ([1, 2, 3, 4][(b * c)])) * d)",
+        },
+        .{
+            .@"test" = "add(a * b[2], b[1], 2 * [1, 2][1])",
+            .expect = "add((a * (b[2])), (b[1]), (2 * ([1, 2][1])))",
         },
     };
 
@@ -1473,6 +1509,153 @@ test "test parsing arrays" {
                                 },
                             },
                         }),
+                    },
+                },
+            },
+        },
+    };
+
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    var scanner: Scanner = .init(input);
+
+    var parser: Parser = .init(allocator, &scanner);
+
+    const program: ast.Program = try parser.parseProgram();
+
+    try std.testing.expectEqual(cases.len, program.statements.len);
+
+    for (program.statements, cases) |statement, case| {
+        try std.testing.expectEqualDeep(case, statement);
+    }
+}
+
+test "test parsing array access expressions" {
+    const input =
+        \\arr[0];
+        \\arr[idx];
+        \\arr[0][1];
+        \\[1, 2, 3][0];
+    ;
+
+    const cases = [_]ast.Statement{
+        ast.Statement{
+            .expressionStatement = .{
+                .token = .{ .type = .IDENT, .literal = "arr", .line = 1, .column = 1 },
+                .expression = &ast.Expression{
+                    .access = .{
+                        .token = .{ .type = .LBRACKET, .literal = "[", .line = 1, .column = 4 },
+                        .collection = &ast.Expression{
+                            .identifier = .{
+                                .token = .{ .type = .IDENT, .literal = "arr", .line = 1, .column = 1 },
+                                .name = "arr",
+                            },
+                        },
+                        .index = &ast.Expression{
+                            .integer = .{
+                                .token = .{ .type = .INT, .literal = "0", .line = 1, .column = 5 },
+                                .value = 0,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        ast.Statement{
+            .expressionStatement = .{
+                .token = .{ .type = .IDENT, .literal = "arr", .line = 2, .column = 1 },
+                .expression = &ast.Expression{
+                    .access = .{
+                        .token = .{ .type = .LBRACKET, .literal = "[", .line = 2, .column = 4 },
+                        .collection = &ast.Expression{
+                            .identifier = .{
+                                .token = .{ .type = .IDENT, .literal = "arr", .line = 2, .column = 1 },
+                                .name = "arr",
+                            },
+                        },
+                        .index = &ast.Expression{
+                            .identifier = .{
+                                .token = .{ .type = .IDENT, .literal = "idx", .line = 2, .column = 5 },
+                                .name = "idx",
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        ast.Statement{
+            .expressionStatement = .{
+                .token = .{ .type = .IDENT, .literal = "arr", .line = 3, .column = 1 },
+                .expression = &ast.Expression{
+                    .access = .{
+                        .token = .{ .type = .LBRACKET, .literal = "[", .line = 3, .column = 7 },
+                        .collection = &ast.Expression{
+                            .access = .{
+                                .token = .{ .type = .LBRACKET, .literal = "[", .line = 3, .column = 4 },
+                                .collection = &ast.Expression{
+                                    .identifier = .{
+                                        .token = .{ .type = .IDENT, .literal = "arr", .line = 3, .column = 1 },
+                                        .name = "arr",
+                                    },
+                                },
+                                .index = &ast.Expression{
+                                    .integer = .{
+                                        .token = .{ .type = .INT, .literal = "0", .line = 3, .column = 5 },
+                                        .value = 0,
+                                    },
+                                },
+                            },
+                        },
+                        .index = &ast.Expression{
+                            .integer = .{
+                                .token = .{ .type = .INT, .literal = "1", .line = 3, .column = 8 },
+                                .value = 1,
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        ast.Statement{
+            .expressionStatement = .{
+                .token = .{ .type = .LBRACKET, .literal = "[", .line = 4, .column = 1 },
+                .expression = &ast.Expression{
+                    .access = .{
+                        .token = .{ .type = .LBRACKET, .literal = "[", .line = 4, .column = 10 },
+                        .collection = &ast.Expression{
+                            .array = .{
+                                .token = .{ .type = .LBRACKET, .literal = "[", .line = 4, .column = 1 },
+                                .items = @constCast(&[_]*const ast.Expression{
+                                    &ast.Expression{
+                                        .integer = .{
+                                            .token = .{ .type = .INT, .literal = "1", .line = 4, .column = 2 },
+                                            .value = 1,
+                                        },
+                                    },
+                                    &ast.Expression{
+                                        .integer = .{
+                                            .token = .{ .type = .INT, .literal = "2", .line = 4, .column = 5 },
+                                            .value = 2,
+                                        },
+                                    },
+                                    &ast.Expression{
+                                        .integer = .{
+                                            .token = .{ .type = .INT, .literal = "3", .line = 4, .column = 8 },
+                                            .value = 3,
+                                        },
+                                    },
+                                }),
+                            },
+                        },
+                        .index = &ast.Expression{
+                            .integer = .{
+                                .token = .{ .type = .INT, .literal = "0", .line = 4, .column = 11 },
+                                .value = 0,
+                            },
+                        },
                     },
                 },
             },

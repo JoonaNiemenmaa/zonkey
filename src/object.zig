@@ -41,7 +41,9 @@ fn len(args: []*Object, token: Token, env: *Environment) Allocator.Error!*Object
     const obj = args[0];
 
     return switch (obj.value) {
-        .string => |string| return createIntegerObject(@intCast(string.len), env.allocator),
+        .string => |string| createIntegerObject(@intCast(string.len), env.allocator),
+        .array => |array| createIntegerObject(@intCast(array.items.len), env.allocator),
+        .@"error" => obj,
         else => try createErrorObject(
             token.line,
             token.column,
@@ -52,12 +54,142 @@ fn len(args: []*Object, token: Token, env: *Environment) Allocator.Error!*Object
     };
 }
 
+const FIRST_ARGS = 1;
+
+fn first(args: []*Object, token: Token, env: *Environment) Allocator.Error!*Object {
+    if (args.len != FIRST_ARGS) return createErrorObject(
+        token.line,
+        token.column,
+        "function call provided {} arguments instead of {}",
+        .{ args.len, FIRST_ARGS },
+        env.allocator,
+    );
+
+    const obj = args[0];
+
+    switch (obj.value) {
+        .array => |array| {
+            if (array.items.len > 0) {
+                array.items[0].inc();
+                return array.items[0];
+            } else {
+                return @constCast(NULL);
+            }
+        },
+        .@"error" => return obj,
+        else => return try createErrorObject(
+            token.line,
+            token.column,
+            "argument to 'first' not supported, got {s}",
+            .{@tagName(obj.value)},
+            env.allocator,
+        ),
+    }
+}
+
+const REST_ARGS = 1;
+
+fn rest(args: []*Object, token: Token, env: *Environment) Allocator.Error!*Object {
+    if (args.len != REST_ARGS) return createErrorObject(
+        token.line,
+        token.column,
+        "function call provided {} arguments instead of {}",
+        .{ args.len, REST_ARGS },
+        env.allocator,
+    );
+
+    const obj = args[0];
+
+    switch (obj.value) {
+        .array => |array| {
+            if (array.items.len == 0) return try createArrayObject(
+                &[_]*Object{},
+                env.allocator,
+            );
+
+            const objects = try env.allocator.alloc(*Object, array.items.len - 1);
+            errdefer env.allocator.free(objects);
+
+            for (array.items[1..], 0..) |item, i| {
+                objects[i] = item;
+                item.inc();
+            }
+
+            return try createArrayObject(objects, env.allocator);
+        },
+        .@"error" => return obj,
+        else => return try createErrorObject(
+            token.line,
+            token.column,
+            "argument to 'rest' not supported, got {s}",
+            .{@tagName(obj.value)},
+            env.allocator,
+        ),
+    }
+}
+
+const PUSH_ARGS = 2;
+
+fn push(args: []*Object, token: Token, env: *Environment) Allocator.Error!*Object {
+    if (args.len != PUSH_ARGS) return createErrorObject(
+        token.line,
+        token.column,
+        "function call provided {} arguments instead of {}",
+        .{ args.len, PUSH_ARGS },
+        env.allocator,
+    );
+
+    const obj = args[0];
+
+    switch (obj.value) {
+        .array => |array| {
+            if (args[1].value == .@"error") return args[1];
+            try array.append(env.allocator, args[1]);
+            args[1].inc();
+            obj.inc();
+            return obj;
+        },
+        .@"error" => {
+            obj.inc();
+            return obj;
+        },
+        else => return try createErrorObject(
+            token.line,
+            token.column,
+            "argument to 'push' not supported, got {s}",
+            .{@tagName(obj.value)},
+            env.allocator,
+        ),
+    }
+}
+
 pub const builtins: StaticStringMap(*const Object) = .initComptime(.{
     .{
         "len",
         &Object{
             .refs = 1,
             .value = .{ .builtin = &len },
+        },
+    },
+    .{
+        "first",
+        &Object{
+            .refs = 1,
+            .value = .{ .builtin = &first },
+        },
+    },
+    .{
+        "rest",
+        &Object{
+            .refs = 1,
+            .value = .{ .builtin = &rest },
+        },
+    },
+    .{
+        "push",
+        &Object{
+            .refs = 1,
+            .value = .{ .builtin = &push },
         },
     },
 });
@@ -105,6 +237,23 @@ pub fn createErrorObject(
     return @"error";
 }
 
+pub fn createArrayObject(objects: []*Object, allocator: Allocator) !*Object {
+    var array = try allocator.create(ArrayList(*Object));
+    array.* = .fromOwnedSlice(objects);
+
+    errdefer {
+        array.deinit(allocator);
+        allocator.destroy(array);
+    }
+
+    const object = try createObject(allocator);
+    errdefer object.destroy(allocator);
+
+    object.value = Value{ .array = array };
+
+    return object;
+}
+
 pub const Object = struct {
     refs: usize,
     value: Value,
@@ -115,7 +264,13 @@ pub const Object = struct {
 
     pub fn dec(self: *@This(), allocator: Allocator) void {
         if (self.refs > 0) self.refs -= 1;
-        if (self.refs == 0) self.destroy(allocator);
+        if (self.refs == 0) {
+            switch (self.value) {
+                .array => |array| for (array.items) |item| item.dec(allocator),
+                else => {},
+            }
+            self.destroy(allocator);
+        }
     }
 
     pub fn destroy(self: *@This(), allocator: Allocator) void {
@@ -131,18 +286,22 @@ pub const Object = struct {
                 allocator.destroy(@"error");
             },
             .function => |function| allocator.destroy(function),
+            .array => |array| {
+                array.deinit(allocator);
+                allocator.destroy(array);
+            },
         }
         allocator.destroy(self);
     }
 
     pub fn print(self: @This(), writer: *Writer) !void {
         switch (self.value) {
-            .boolean => |boolean| try writer.print("{}\n", .{boolean}),
-            .null => try writer.print("null\n", .{}),
-            .integer => |integer| try writer.print("{}\n", .{integer}),
-            .string => |string| try writer.print("\"{s}\"\n", .{string}),
+            .boolean => |boolean| try writer.print("{}", .{boolean}),
+            .null => try writer.print("null", .{}),
+            .integer => |integer| try writer.print("{}", .{integer}),
+            .string => |string| try writer.print("{s}", .{string}),
             .@"return" => |@"return"| try @"return".print(writer),
-            .@"error" => |@"error"| try writer.print("ERROR: {}:{} {s}\n", .{
+            .@"error" => |@"error"| try writer.print("ERROR: {}:{} {s}", .{
                 @"error".line,
                 @"error".column,
                 @"error".message,
@@ -155,9 +314,19 @@ pub const Object = struct {
                 }
                 try writer.print(") ", .{});
                 try function.body.print(writer);
-                try writer.print("\n", .{});
             },
             .builtin => |builtin| try writer.print("BUILTIN: {}\n", .{builtin}),
+            .array => |array| {
+                try writer.print("[", .{});
+                for (array.items, 1..) |item, i| {
+                    switch (item.value) {
+                        .array => try writer.print("[...]", .{}),
+                        else => try item.print(writer),
+                    }
+                    if (i < array.items.len) try writer.print(", ", .{});
+                }
+                try writer.print("]", .{});
+            },
         }
     }
 };
@@ -171,6 +340,7 @@ pub const Value = union(enum) {
     @"error": *Error,
     function: *Function,
     builtin: *const fn ([]*Object, Token, *Environment) Allocator.Error!*Object,
+    array: *ArrayList(*Object),
 };
 
 pub const Error = struct {

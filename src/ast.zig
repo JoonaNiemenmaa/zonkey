@@ -99,6 +99,7 @@ pub const Expression = union(enum) {
     function: Function,
     call: Call,
     array: Array,
+    access: Access,
 
     pub fn print(self: @This(), writer: *Writer) Writer.Error!void {
         return switch (self) {
@@ -186,6 +187,21 @@ pub const Array = struct {
             if (i < self.items.len) try writer.print(", ", .{});
         }
         try writer.print("]", .{});
+    }
+};
+
+pub const Access = struct {
+    token: Token,
+    collection: *const Expression,
+    index: *const Expression,
+
+    pub fn print(self: @This(), writer: *Writer) !void {
+        try writer.print("(", .{});
+        try self.collection.print(writer);
+        try writer.print("[", .{});
+        try self.index.print(writer);
+        try writer.print("]", .{});
+        try writer.print(")", .{});
     }
 };
 

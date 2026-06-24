@@ -66,6 +66,7 @@ pub fn evaluateFile(io: Io, filename: []const u8) !void {
         defer env.deinit();
         const result = try monkey.evaluate.evaluateProgram(program, &env);
         try result.print(stdout);
+        try stdout.print("\n", .{});
         result.dec(env.allocator);
     } else {
         try stdout.print("{s}\n", .{MONKEY_FACE});
@@ -133,8 +134,10 @@ pub fn startRepl() !void {
 
         if (errors.len == 0) {
             const result = try monkey.evaluate.evaluateProgram(program, &env);
+            defer result.dec(env.allocator);
+
             try result.print(stdout);
-            result.dec(env.allocator);
+            try stdout.print("\n", .{});
         } else {
             try stdout.print("{s}\n", .{MONKEY_FACE});
             try stdout.print("Woops! We ran into some monkey business here!\n", .{});
