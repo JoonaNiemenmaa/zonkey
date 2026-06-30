@@ -9,6 +9,7 @@ const File = std.Io.File;
 const Io = std.Io;
 const ArrayList = std.ArrayList;
 
+const Evaluator = monkey.evaluate.Evaluator;
 const Scanner = monkey.scanner.Scanner;
 const Parser = monkey.parser.Parser;
 const Environment = monkey.object.Environment;
@@ -62,12 +63,12 @@ pub fn evaluateFile(io: Io, filename: []const u8) !void {
     const errors = try parser.errors.toOwnedSlice(arena);
 
     if (errors.len == 0) {
-        var env: Environment = .init(gpa, null);
-        defer env.deinit();
-        const result = try monkey.evaluate.evaluateProgram(program, &env);
+        var evaluator = Evaluator.init(gpa);
+        defer evaluator.deinit();
+        const result = try evaluator.evaluateProgram(program);
         try result.print(stdout);
         try stdout.print("\n", .{});
-        result.dec(env.allocator);
+        result.dec(&evaluator.gc);
     } else {
         try stdout.print("{s}\n", .{MONKEY_FACE});
         try stdout.print("Woops! We ran into some monkey business here!\n", .{});
@@ -101,11 +102,10 @@ pub fn startRepl() !void {
     var parserArena: ArenaAllocator = .init(gpa);
     var inputArena: ArenaAllocator = .init(gpa);
     var lines: ArrayList([]const u8) = .empty;
-    var env: Environment = .init(gpa, null);
+    var evaluator = Evaluator.init(gpa);
 
     defer {
-        env.deinit();
-
+        evaluator.deinit();
         parserArena.deinit();
         inputArena.deinit();
         lines.deinit(gpa);
@@ -133,8 +133,8 @@ pub fn startRepl() !void {
         const errors = try parser.errors.toOwnedSlice(parserArena.allocator());
 
         if (errors.len == 0) {
-            const result = try monkey.evaluate.evaluateProgram(program, &env);
-            defer result.dec(env.allocator);
+            const result = try evaluator.evaluateProgram(program);
+            defer result.dec(&evaluator.gc);
 
             try result.print(stdout);
             try stdout.print("\n", .{});

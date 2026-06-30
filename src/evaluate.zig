@@ -6,12 +6,16 @@ const object = monkey.object;
 
 const Object = object.Object;
 const Value = object.Value;
+const Token = monkey.token.Token;
 const ArrayList = std.ArrayList;
 const Environment = object.Environment;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
+const StaticStringMap = std.StaticStringMap;
+
 const Scanner = monkey.scanner.Scanner;
 const Parser = monkey.parser.Parser;
+const GarbageCollector = monkey.object.GarbageCollector;
 
 const TRUE = object.TRUE;
 const FALSE = object.FALSE;
@@ -24,104 +28,129 @@ const createErrorObject = object.createErrorObject;
 const createArrayObject = object.createArrayObject;
 const toBooleanObject = object.toBooleanObject;
 
-pub fn evaluateProgram(program: ast.Program, env: *Environment) !*Object {
+pub const Evaluator = @This();
+
+allocator: Allocator,
+gc: GarbageCollector,
+root: Environment,
+
+builtins: StaticStringMap(*const Object) = .initComptime(.{
+    .{ "len", &Object{ .value = .{ .builtin = &len } } },
+    .{ "first", &Object{ .value = .{ .builtin = &first } } },
+    .{ "rest", &Object{ .value = .{ .builtin = &rest } } },
+    .{ "push", &Object{ .value = .{ .builtin = &push } } },
+}),
+
+pub fn init(allocator: Allocator) @This() {
+    return @This(){ .allocator = allocator, .gc = .init(allocator), .root = .init(allocator, null) };
+}
+
+pub fn deinit(self: *@This()) void {
+    self.root.deinit(&self.gc);
+    self.gc.collect();
+}
+
+pub fn evaluateProgram(self: *@This(), program: ast.Program) !*Object {
     var result: *Object = @constCast(object.NULL);
     for (program.statements, 1..) |statement, i| {
-        result = try evaluateStatement(statement, env);
+        result = try self.evaluateStatement(statement, &self.root);
 
         switch (result.value) {
             .@"return" => |value| {
-                result.dec(env.allocator);
+                result.dec(&self.gc);
                 return value;
             },
             .@"error" => return result,
             else => {},
         }
 
-        if (i < program.statements.len) result.dec(env.allocator);
+        if (i < program.statements.len) result.dec(&self.gc);
     }
+
+    self.gc.collect();
+
     return result;
 }
 
-fn evaluateStatement(statement: ast.Statement, env: *Environment) Allocator.Error!*Object {
+fn evaluateStatement(self: *@This(), statement: ast.Statement, env: *Environment) Allocator.Error!*Object {
     return switch (statement) {
-        .expressionStatement => |expressionStatement| try evaluateExpression(expressionStatement.expression.*, env),
-        .returnStatement => |returnStatement| try evaluateReturn(returnStatement, env),
-        .letStatement => |letStatement| try evaluateLet(letStatement, env),
+        .expressionStatement => |expressionStatement| try self.evaluateExpression(expressionStatement.expression.*, env),
+        .returnStatement => |returnStatement| try self.evaluateReturn(returnStatement, env),
+        .letStatement => |letStatement| try self.evaluateLet(letStatement, env),
         else => unreachable,
     };
 }
 
-fn evaluateBlock(block: ast.Block, env: *Environment) !*Object {
+fn evaluateBlock(self: *@This(), block: ast.Block, env: *Environment) !*Object {
     var result: *Object = @constCast(NULL);
     for (block.statements, 1..) |statement, i| {
-        result = try evaluateStatement(statement, env);
+        result = try self.evaluateStatement(statement, env);
         if (result.value == .@"return" or result.value == .@"error") return result;
-        if (i < block.statements.len) result.dec(env.allocator);
+        if (i < block.statements.len) result.dec(&self.gc);
     }
     return result;
 }
 
-fn evaluateReturn(statement: ast.ReturnStatement, env: *Environment) !*Object {
-    const result = try createObject(env.allocator);
-    result.value = Value{ .@"return" = try evaluateExpression(statement.expression.*, env) };
+fn evaluateReturn(self: *@This(), statement: ast.ReturnStatement, env: *Environment) !*Object {
+    const result = try createObject(self.allocator);
+    result.value = Value{ .@"return" = try self.evaluateExpression(statement.expression.*, env) };
     return result;
 }
 
-fn evaluateLet(statement: ast.LetStatement, env: *Environment) !*Object {
-    const result = try evaluateExpression(statement.expression.*, env);
+fn evaluateLet(self: *@This(), statement: ast.LetStatement, env: *Environment) !*Object {
+    const result = try self.evaluateExpression(statement.expression.*, env);
     if (result.value == .@"error") return result;
-    try env.put(statement.identifier.name, result);
+    try env.put(statement.identifier.name, result, &self.gc);
     return result;
 }
 
-fn evaluateExpression(expression: ast.Expression, env: *Environment) Allocator.Error!*Object {
+fn evaluateExpression(self: *@This(), expression: ast.Expression, env: *Environment) Allocator.Error!*Object {
     return switch (expression) {
-        .identifier => |identifier| evaluateIdentifier(identifier, env),
-        .integer => |integer| createIntegerObject(integer.value, env.allocator),
+        .identifier => |identifier| self.evaluateIdentifier(identifier, env),
+        .integer => |integer| createIntegerObject(integer.value, self.allocator),
         .boolean => |boolean| toBooleanObject(boolean.value),
-        .string => |string| createStringObject(string.value, env.allocator),
-        .prefix => |prefix| evaluatePrefix(prefix, env),
-        .infix => |infix| evaluateInfix(infix, env),
-        .@"if" => |@"if"| evaluateIf(@"if", env),
-        .function => |function| evaluateFunction(function, env),
-        .call => |call| evaluateCall(call, env),
-        .array => |array| evaluateArray(array, env),
-        .access => |access| evaluateAccess(access, env),
+        .string => |string| createStringObject(string.value, self.allocator),
+        .prefix => |prefix| self.evaluatePrefix(prefix, env),
+        .infix => |infix| self.evaluateInfix(infix, env),
+        .@"if" => |@"if"| self.evaluateIf(@"if", env),
+        .function => |function| self.evaluateFunction(function, env),
+        .call => |call| self.evaluateCall(call, env),
+        .array => |array| self.evaluateArray(array, env),
+        .access => |access| self.evaluateAccess(access, env),
     };
 }
 
-fn evaluateArray(literal: ast.Array, env: *Environment) !*Object {
-    const objects = try env.allocator.alloc(*Object, literal.items.len);
-    errdefer env.allocator.free(objects);
+fn evaluateArray(self: *@This(), literal: ast.Array, env: *Environment) !*Object {
+    const objects = try self.allocator.alloc(*Object, literal.items.len);
+    errdefer self.allocator.free(objects);
 
     for (literal.items, 0..) |item, i| {
-        const result = try evaluateExpression(item.*, env);
+        const result = try self.evaluateExpression(item.*, env);
 
         if (result.value == .@"error") {
-            for (objects[0..i]) |obj| obj.dec(env.allocator);
-            env.allocator.free(objects);
+            for (objects[0..i]) |obj| obj.dec(&self.gc);
+            self.allocator.free(objects);
             return result;
         }
 
         objects[i] = result;
     }
 
-    const array = createArrayObject(objects, env.allocator);
+    const array = try createArrayObject(objects, &self.gc);
 
     return array;
 }
 
-fn evaluateAccess(access: ast.Access, env: *Environment) !*Object {
-    const collection = try evaluateExpression(access.collection.*, env);
-    defer collection.dec(env.allocator);
+fn evaluateAccess(self: *@This(), access: ast.Access, env: *Environment) !*Object {
+    const collection = try self.evaluateExpression(access.collection.*, env);
+    defer collection.dec(&self.gc);
 
     if (collection.value == .@"error") return collection;
 
     switch (collection.value) {
         .array => |array| {
-            const index = try evaluateExpression(access.index.*, env);
-            defer index.dec(env.allocator);
+            const index = try self.evaluateExpression(access.index.*, env);
+            defer index.dec(&self.gc);
 
             if (index.value == .@"error") return index;
 
@@ -138,7 +167,7 @@ fn evaluateAccess(access: ast.Access, env: *Environment) !*Object {
                         access.token.column,
                         "access out of bounds",
                         .{},
-                        env.allocator,
+                        self.allocator,
                     );
                 },
                 else => |value| return createErrorObject(
@@ -146,7 +175,7 @@ fn evaluateAccess(access: ast.Access, env: *Environment) !*Object {
                     access.token.column,
                     "array index must integer, not {s}",
                     .{@tagName(value)},
-                    env.allocator,
+                    self.allocator,
                 ),
             }
         },
@@ -155,88 +184,88 @@ fn evaluateAccess(access: ast.Access, env: *Environment) !*Object {
             access.token.column,
             "{s} object is not indexable",
             .{@tagName(value)},
-            env.allocator,
+            self.allocator,
         ),
     }
 }
 
-fn evaluateCall(call: ast.Call, env: *Environment) !*Object {
-    const arguments = try env.allocator.alloc(*Object, call.arguments.len);
-    defer env.allocator.free(arguments);
+fn evaluateCall(self: *@This(), call: ast.Call, env: *Environment) !*Object {
+    const arguments = try self.allocator.alloc(*Object, call.arguments.len);
+    defer self.allocator.free(arguments);
 
-    for (call.arguments, 0..) |argument, i| arguments[i] = try evaluateExpression(argument.*, env);
+    for (call.arguments, 0..) |argument, i| arguments[i] = try self.evaluateExpression(argument.*, env);
 
-    const expression = try evaluateExpression(call.function.*, env);
+    const expression = try self.evaluateExpression(call.function.*, env);
 
     const function = switch (expression.value) {
         .function => |function| function,
         .builtin => |builtin| {
-            const result = try builtin(arguments, call.token, env);
-            for (arguments) |argument| argument.dec(env.allocator);
-            expression.dec(env.allocator);
+            const result = try builtin(self, arguments, call.token);
+            for (arguments) |argument| argument.dec(&self.gc);
+            expression.dec(&self.gc);
             return result;
         },
         .@"error" => return expression,
         else => |value| return createErrorObject(call.token.line, call.token.column, "cannot call {s}", .{
             @tagName(value),
-        }, env.allocator),
+        }, self.allocator),
     };
 
-    defer expression.dec(env.allocator);
+    defer expression.dec(&self.gc);
 
     if (function.parameters.len != call.arguments.len) return createErrorObject(
         call.token.line,
         call.token.column,
         "function call provided {} arguments instead of {}",
         .{ call.arguments.len, function.parameters.len },
-        env.allocator,
+        self.allocator,
     );
 
-    var innerEnv: Environment = .init(env.allocator, function.env);
-    defer innerEnv.deinit();
+    var innerEnv: Environment = .init(self.allocator, function.env);
+    defer innerEnv.deinit(&self.gc);
 
     for (function.parameters, arguments) |parameter, argument| {
         if (argument.value == .@"error") return argument;
-        try innerEnv.put(parameter.name, argument);
-        argument.dec(env.allocator);
+        try innerEnv.put(parameter.name, argument, &self.gc);
+        argument.dec(&self.gc);
     }
 
-    const result = try evaluateBlock(function.body, &innerEnv);
+    const result = try self.evaluateBlock(function.body, &innerEnv);
 
     switch (result.value) {
         .@"return" => |@"return"| {
-            result.dec(env.allocator);
+            result.dec(&self.gc);
             return @"return";
         },
         else => return result,
     }
 }
 
-fn evaluateIf(@"if": ast.If, env: *Environment) !*Object {
-    const condition = try evaluateExpression(@constCast(@"if".condition).*, env);
+fn evaluateIf(self: *@This(), @"if": ast.If, env: *Environment) !*Object {
+    const condition = try self.evaluateExpression(@constCast(@"if".condition).*, env);
 
     if (condition.value == .@"error") return condition;
 
-    defer condition.dec(env.allocator);
+    defer condition.dec(&self.gc);
 
     if (condition != object.NULL and condition != object.FALSE) {
-        return try evaluateBlock(@"if".consequence, env);
+        return try self.evaluateBlock(@"if".consequence, env);
     } else {
-        return if (@"if".alternative) |alternative| try evaluateBlock(alternative, env) else @constCast(object.NULL);
+        return if (@"if".alternative) |alternative| try self.evaluateBlock(alternative, env) else @constCast(object.NULL);
     }
 }
 
-fn evaluatePrefix(prefix: ast.Prefix, env: *Environment) !*Object {
-    const operand = try evaluateExpression(prefix.operand.*, env);
+fn evaluatePrefix(self: *@This(), prefix: ast.Prefix, env: *Environment) !*Object {
+    const operand = try self.evaluateExpression(prefix.operand.*, env);
 
     return switch (prefix.operator) {
-        .NOT => evaluatePrefixBang(prefix.token, operand, env),
-        .MINUS => evaluatePrefixMinus(prefix.token, operand, env),
+        .NOT => self.evaluatePrefixBang(prefix.token, operand),
+        .MINUS => self.evaluatePrefixMinus(prefix.token, operand),
     };
 }
 
-fn evaluatePrefixBang(token: monkey.token.Token, operand: *Object, env: *Environment) !*Object {
-    defer operand.dec(env.allocator);
+fn evaluatePrefixBang(self: *@This(), token: monkey.token.Token, operand: *Object) !*Object {
+    defer operand.dec(&self.gc);
     return switch (operand.value) {
         .boolean => |boolean| toBooleanObject(!boolean),
         .null => toBooleanObject(true),
@@ -249,12 +278,12 @@ fn evaluatePrefixBang(token: monkey.token.Token, operand: *Object, env: *Environ
                 token.literal,
                 @tagName(operand.value),
             },
-            env.allocator,
+            self.allocator,
         ),
     };
 }
 
-fn evaluatePrefixMinus(token: monkey.token.Token, operand: *Object, env: *Environment) !*Object {
+fn evaluatePrefixMinus(self: *@This(), token: monkey.token.Token, operand: *Object) !*Object {
     return switch (operand.value) {
         .integer => |integer| integerBlock: {
             operand.value = Value{ .integer = -integer };
@@ -268,22 +297,22 @@ fn evaluatePrefixMinus(token: monkey.token.Token, operand: *Object, env: *Enviro
                 token.literal,
                 @tagName(operand.value),
             },
-            env.allocator,
+            self.allocator,
         ),
     };
 }
 
-fn evaluateInfix(infix: ast.Infix, env: *Environment) !*Object {
-    const left = try evaluateExpression(@constCast(infix.left).*, env);
+fn evaluateInfix(self: *@This(), infix: ast.Infix, env: *Environment) !*Object {
+    const left = try self.evaluateExpression(@constCast(infix.left).*, env);
     if (left.value == .@"error") return left;
-    defer left.dec(env.allocator);
+    defer left.dec(&self.gc);
 
-    const right = try evaluateExpression(@constCast(infix.right).*, env);
+    const right = try self.evaluateExpression(@constCast(infix.right).*, env);
     if (right.value == .@"error") return right;
-    defer right.dec(env.allocator);
+    defer right.dec(&self.gc);
 
     if (left.value == .integer and right.value == .integer) {
-        return evaluateIntegerInfix(left, infix.operator, right, env);
+        return self.evaluateIntegerInfix(left, infix.operator, right);
     } else if (left.value == .boolean and right.value == .boolean) {
         return switch (infix.operator) {
             .EQUALS => toBooleanObject(left == right),
@@ -297,11 +326,11 @@ fn evaluateInfix(infix: ast.Infix, env: *Environment) !*Object {
                     infix.token.literal,
                     @tagName(right.value),
                 },
-                env.allocator,
+                self.allocator,
             ),
         };
     } else if (left.value == .string and right.value == .string) {
-        return evaluateStringInfix(left, infix, right, env);
+        return self.evaluateStringInfix(left, infix, right);
     }
 
     return createErrorObject(
@@ -313,11 +342,11 @@ fn evaluateInfix(infix: ast.Infix, env: *Environment) !*Object {
             infix.token.literal,
             @tagName(right.value),
         },
-        env.allocator,
+        self.allocator,
     );
 }
 
-fn evaluateStringInfix(left: *Object, infix: ast.Infix, right: *Object, env: *Environment) !*Object {
+fn evaluateStringInfix(self: *@This(), left: *Object, infix: ast.Infix, right: *Object) !*Object {
     const leftString = switch (left.value) {
         .string => |string| string,
         else => unreachable,
@@ -330,10 +359,10 @@ fn evaluateStringInfix(left: *Object, infix: ast.Infix, right: *Object, env: *En
 
     return switch (infix.operator) {
         .ADD => {
-            const result = try createObject(env.allocator);
+            const result = try createObject(self.allocator);
 
             result.value = Value{
-                .string = try std.mem.concat(env.allocator, u8, &.{ leftString, rightString }),
+                .string = try std.mem.concat(self.allocator, u8, &.{ leftString, rightString }),
             };
 
             return result;
@@ -347,12 +376,12 @@ fn evaluateStringInfix(left: *Object, infix: ast.Infix, right: *Object, env: *En
                 infix.token.literal,
                 @tagName(right.value),
             },
-            env.allocator,
+            self.allocator,
         ),
     };
 }
 
-fn evaluateIntegerInfix(left: *Object, operator: ast.InfixOperator, right: *Object, env: *Environment) !*Object {
+fn evaluateIntegerInfix(self: *@This(), left: *Object, operator: ast.InfixOperator, right: *Object) !*Object {
     const leftInteger = switch (left.value) {
         .integer => |integer| integer,
         else => unreachable,
@@ -364,10 +393,10 @@ fn evaluateIntegerInfix(left: *Object, operator: ast.InfixOperator, right: *Obje
     };
 
     const result = switch (operator) {
-        .ADD => try createIntegerObject(leftInteger + rightInteger, env.allocator),
-        .SUBTRACT => try createIntegerObject(leftInteger - rightInteger, env.allocator),
-        .MULTIPLY => try createIntegerObject(leftInteger * rightInteger, env.allocator),
-        .DIVIDE => try createIntegerObject(@divFloor(leftInteger, rightInteger), env.allocator),
+        .ADD => try createIntegerObject(leftInteger + rightInteger, self.allocator),
+        .SUBTRACT => try createIntegerObject(leftInteger - rightInteger, self.allocator),
+        .MULTIPLY => try createIntegerObject(leftInteger * rightInteger, self.allocator),
+        .DIVIDE => try createIntegerObject(@divFloor(leftInteger, rightInteger), self.allocator),
 
         .EQUALS => toBooleanObject(leftInteger == rightInteger),
         .NOT_EQUALS => toBooleanObject(leftInteger != rightInteger),
@@ -378,10 +407,10 @@ fn evaluateIntegerInfix(left: *Object, operator: ast.InfixOperator, right: *Obje
     return result;
 }
 
-fn evaluateFunction(function: ast.Function, env: *Environment) !*Object {
-    const functionObject = try createObject(env.allocator);
+fn evaluateFunction(self: *@This(), function: ast.Function, env: *Environment) !*Object {
+    const functionObject = try createObject(self.allocator);
 
-    const value = try env.allocator.create(object.Function);
+    const value = try self.allocator.create(object.Function);
 
     value.body = function.body;
     value.parameters = function.parameters;
@@ -391,21 +420,157 @@ fn evaluateFunction(function: ast.Function, env: *Environment) !*Object {
     return functionObject;
 }
 
-fn evaluateIdentifier(identifier: ast.Identifier, env: *Environment) !*Object {
+fn evaluateIdentifier(self: *@This(), identifier: ast.Identifier, env: *Environment) !*Object {
     if (try env.get(identifier.name)) |value| return value;
 
-    if (object.builtins.get(identifier.name)) |builtin| return @constCast(builtin);
+    if (self.builtins.get(identifier.name)) |builtin| return @constCast(builtin);
 
     return try createErrorObject(
         identifier.token.line,
         identifier.token.column,
         "identifier not found: {s}",
         .{identifier.name},
-        env.allocator,
+        self.allocator,
     );
 }
 
-fn evaluateTestCase(input: []const u8) !*Object {
+const LEN_ARGS = 1;
+
+fn len(self: *@This(), args: []*Object, token: Token) Allocator.Error!*Object {
+    if (args.len != LEN_ARGS) return createErrorObject(
+        token.line,
+        token.column,
+        "function call provided {} arguments instead of {}",
+        .{ args.len, LEN_ARGS },
+        self.allocator,
+    );
+
+    const obj = args[0];
+
+    return switch (obj.value) {
+        .string => |string| createIntegerObject(@intCast(string.len), self.allocator),
+        .array => |array| createIntegerObject(@intCast(array.items.len), self.allocator),
+        .@"error" => obj,
+        else => try createErrorObject(
+            token.line,
+            token.column,
+            "argument to 'len' not supported, got {s}",
+            .{@tagName(obj.value)},
+            self.allocator,
+        ),
+    };
+}
+
+const FIRST_ARGS = 1;
+
+fn first(self: *@This(), args: []*Object, token: Token) Allocator.Error!*Object {
+    if (args.len != FIRST_ARGS) return createErrorObject(
+        token.line,
+        token.column,
+        "function call provided {} arguments instead of {}",
+        .{ args.len, FIRST_ARGS },
+        self.allocator,
+    );
+
+    const obj = args[0];
+
+    switch (obj.value) {
+        .array => |array| {
+            if (array.items.len > 0) {
+                array.items[0].inc();
+                return array.items[0];
+            } else {
+                return @constCast(NULL);
+            }
+        },
+        .@"error" => return obj,
+        else => return try createErrorObject(
+            token.line,
+            token.column,
+            "argument to 'first' not supported, got {s}",
+            .{@tagName(obj.value)},
+            self.allocator,
+        ),
+    }
+}
+
+const REST_ARGS = 1;
+
+fn rest(self: *@This(), args: []*Object, token: Token) Allocator.Error!*Object {
+    if (args.len != REST_ARGS) return createErrorObject(
+        token.line,
+        token.column,
+        "function call provided {} arguments instead of {}",
+        .{ args.len, REST_ARGS },
+        self.allocator,
+    );
+
+    const obj = args[0];
+
+    switch (obj.value) {
+        .array => |array| {
+            if (array.items.len == 0) return try createArrayObject(
+                &[_]*Object{},
+                &self.gc,
+            );
+
+            const objects = try self.allocator.alloc(*Object, array.items.len - 1);
+            errdefer self.allocator.free(objects);
+
+            for (array.items[1..], 0..) |item, i| {
+                objects[i] = item;
+                item.inc();
+            }
+
+            return try createArrayObject(objects, &self.gc);
+        },
+        .@"error" => return obj,
+        else => return try createErrorObject(
+            token.line,
+            token.column,
+            "argument to 'rest' not supported, got {s}",
+            .{@tagName(obj.value)},
+            self.allocator,
+        ),
+    }
+}
+
+const PUSH_ARGS = 2;
+
+fn push(self: *@This(), args: []*Object, token: Token) Allocator.Error!*Object {
+    if (args.len != PUSH_ARGS) return createErrorObject(
+        token.line,
+        token.column,
+        "function call provided {} arguments instead of {}",
+        .{ args.len, PUSH_ARGS },
+        self.allocator,
+    );
+
+    const obj = args[0];
+
+    switch (obj.value) {
+        .array => |array| {
+            if (args[1].value == .@"error") return args[1];
+            try array.append(self.allocator, args[1]);
+            args[1].inc();
+            obj.inc();
+            return obj;
+        },
+        .@"error" => {
+            obj.inc();
+            return obj;
+        },
+        else => return try createErrorObject(
+            token.line,
+            token.column,
+            "argument to 'push' not supported, got {s}",
+            .{@tagName(obj.value)},
+            self.allocator,
+        ),
+    }
+}
+
+fn evaluateTestCase(self: *@This(), input: []const u8) !*Object {
     var scanner: Scanner = .init(input);
 
     var arena: ArenaAllocator = .init(std.testing.allocator);
@@ -415,15 +580,12 @@ fn evaluateTestCase(input: []const u8) !*Object {
 
     const program = try parser.parseProgram();
 
-    var env: Environment = .init(std.testing.allocator, null);
-    defer env.deinit();
-
-    return try evaluateProgram(program, &env);
+    return try self.evaluateProgram(program);
 }
 
-fn expectObject(expected: *const Object, case: []const u8) !void {
-    const result = try evaluateTestCase(case);
-    defer result.dec(std.testing.allocator);
+fn expectObject(self: *@This(), expected: *const Object, case: []const u8) !void {
+    const result = try self.evaluateTestCase(case);
+    defer result.dec(&self.gc);
     try std.testing.expectEqualDeep(expected, result);
 }
 
@@ -452,8 +614,11 @@ test "integer evaluation" {
         .{ .@"test" = "(5 + 10 * 2 + 15 / 3) * 2 + -10", .expect = 50 },
     };
 
+    var evaluator = Evaluator.init(std.testing.allocator);
+    defer evaluator.deinit();
+
     for (cases) |case| {
-        const result = try evaluateTestCase(case.@"test");
+        const result = try evaluator.evaluateTestCase(case.@"test");
 
         try std.testing.expect(result.value == .integer);
 
@@ -462,7 +627,7 @@ test "integer evaluation" {
             else => unreachable,
         }
 
-        result.dec(std.testing.allocator);
+        result.dec(&evaluator.gc);
     }
 }
 
@@ -495,8 +660,11 @@ test "boolean evaluation" {
         .{ .@"test" = "(1 > 2) == false", .expect = TRUE },
     };
 
+    var evaluator = Evaluator.init(std.testing.allocator);
+    defer evaluator.deinit();
+
     for (cases) |case| {
-        const result = try evaluateTestCase(case.@"test");
+        const result = try evaluator.evaluateTestCase(case.@"test");
 
         try std.testing.expect(result.value == .boolean);
 
@@ -506,7 +674,7 @@ test "boolean evaluation" {
             return err;
         };
 
-        result.dec(std.testing.allocator);
+        result.dec(&evaluator.gc);
     }
 }
 
@@ -521,12 +689,15 @@ test "test if expression evaluation" {
         .{ .@"test" = "if (1 > 2) { 10 }", .expect = NULL.value },
     };
 
+    var evaluator = Evaluator.init(std.testing.allocator);
+    defer evaluator.deinit();
+
     for (cases) |case| {
-        const result = try evaluateTestCase(case.@"test");
+        const result = try evaluator.evaluateTestCase(case.@"test");
 
         try std.testing.expectEqual(case.expect, result.value);
 
-        result.dec(std.testing.allocator);
+        result.dec(&evaluator.gc);
     }
 }
 
@@ -547,12 +718,15 @@ test "test return statements" {
         , .expect = Value{ .integer = 10 } },
     };
 
+    var evaluator = Evaluator.init(std.testing.allocator);
+    defer evaluator.deinit();
+
     for (cases) |case| {
-        const result = try evaluateTestCase(case.@"test");
+        const result = try evaluator.evaluateTestCase(case.@"test");
 
         try std.testing.expectEqualDeep(case.expect, result.value);
 
-        result.dec(std.testing.allocator);
+        result.dec(&evaluator.gc);
     }
 }
 
@@ -588,15 +762,18 @@ test "test error handling" {
         },
     };
 
+    var evaluator = Evaluator.init(std.testing.allocator);
+    defer evaluator.deinit();
+
     for (cases) |case| {
-        const result = try evaluateTestCase(case.@"test");
+        const result = try evaluator.evaluateTestCase(case.@"test");
 
         switch (result.value) {
             .@"error" => |@"error"| try std.testing.expectEqualSlices(u8, case.expect, @"error".message),
             else => try std.testing.expect(false),
         }
 
-        result.dec(std.testing.allocator);
+        result.dec(&evaluator.gc);
     }
 }
 
@@ -608,15 +785,18 @@ test "test let statements" {
         .{ .@"test" = "let a = 5; let a = 10; a;", .expect = 10 },
     };
 
+    var evaluator = Evaluator.init(std.testing.allocator);
+    defer evaluator.deinit();
+
     for (cases) |case| {
-        const result = try evaluateTestCase(case.@"test");
+        const result = try evaluator.evaluateTestCase(case.@"test");
 
         switch (result.value) {
             .integer => |integer| try std.testing.expectEqual(case.expect, integer),
             else => try std.testing.expect(false),
         }
 
-        result.dec(std.testing.allocator);
+        result.dec(&evaluator.gc);
     }
 }
 
@@ -630,10 +810,10 @@ test "test function literals" {
 
     const program = try parser.parseProgram();
 
-    var env: Environment = .init(std.testing.allocator, null);
-    defer env.deinit();
+    var evaluator = Evaluator.init(std.testing.allocator);
+    defer evaluator.deinit();
 
-    const result = try evaluateProgram(program, &env);
+    const result = try evaluator.evaluateProgram(program);
 
     const expected = @constCast(&object.Function{
         .body = .{
@@ -700,7 +880,7 @@ test "test function literals" {
                 .name = "x",
             },
         },
-        .env = &env,
+        .env = &evaluator.root,
     });
 
     try std.testing.expect(result.value == .function);
@@ -714,7 +894,7 @@ test "test function literals" {
         else => unreachable,
     }
 
-    result.dec(std.testing.allocator);
+    result.dec(&evaluator.gc);
 }
 
 test "test function evaluation" {
@@ -727,38 +907,47 @@ test "test function evaluation" {
         .{ .@"test" = "fn(x) { x; }(5)", .expect = 5 },
     };
 
+    var evaluator = Evaluator.init(std.testing.allocator);
+    defer evaluator.deinit();
+
     for (cases) |case| {
-        const result = try evaluateTestCase(case.@"test");
+        const result = try evaluator.evaluateTestCase(case.@"test");
 
         switch (result.value) {
             .integer => |integer| try std.testing.expectEqual(case.expect, integer),
             else => try std.testing.expect(false),
         }
 
-        result.dec(std.testing.allocator);
+        result.dec(&evaluator.gc);
     }
 }
 
 test "string evaluation" {
-    try expectObject(&Object{ .refs = 1, .value = .{ .string = "OLEN PARAS" } },
+    var evaluator = Evaluator.init(std.testing.allocator);
+    defer evaluator.deinit();
+
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .string = "OLEN PARAS" } },
         \\"OLEN PARAS"
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .string = "MITÄ HONGYUAN TARVITSEE?" } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .string = "MITÄ HONGYUAN TARVITSEE?" } },
         \\"MITÄ" + " " + "HONGYUAN" + " " + "TARVITSEE?"
     );
 }
 
 test "builtin len function" {
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 0 } },
+    var evaluator = Evaluator.init(std.testing.allocator);
+    defer evaluator.deinit();
+
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .integer = 0 } },
         \\len("");
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 4 } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .integer = 4 } },
         \\len("four");
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 11 } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .integer = 11 } },
         \\len("hello world");
     );
-    try expectObject(&Object{
+    try evaluator.expectObject(&Object{
         .refs = 1,
         .value = .{
             .@"error" = @constCast(&object.Error{
@@ -770,7 +959,7 @@ test "builtin len function" {
     },
         \\len(1);
     );
-    try expectObject(&Object{
+    try evaluator.expectObject(&Object{
         .refs = 1,
         .value = .{
             .@"error" = @constCast(&object.Error{
@@ -785,25 +974,28 @@ test "builtin len function" {
 }
 
 test "array evaluation" {
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 1 } },
+    var evaluator = Evaluator.init(std.testing.allocator);
+    defer evaluator.deinit();
+
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .integer = 1 } },
         \\[1, 2, 3][0];
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 2 } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .integer = 2 } },
         \\[1, 2, 3][1];
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 3 } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .integer = 3 } },
         \\[1, 2, 3][2];
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .string = "hello" } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .string = "hello" } },
         \\["hello", "world"][0];
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .boolean = true } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .boolean = true } },
         \\[true, false][0];
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .boolean = false } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .boolean = false } },
         \\[true, false][1];
     );
-    try expectObject(&Object{
+    try evaluator.expectObject(&Object{
         .refs = 1,
         .value = .{
             .@"error" = @constCast(&object.Error{
@@ -815,7 +1007,7 @@ test "array evaluation" {
     },
         \\[1, 2, 3][4];
     );
-    try expectObject(&Object{
+    try evaluator.expectObject(&Object{
         .refs = 1,
         .value = .{
             .@"error" = @constCast(&object.Error{
@@ -827,7 +1019,7 @@ test "array evaluation" {
     },
         \\[][0];
     );
-    try expectObject(&Object{
+    try evaluator.expectObject(&Object{
         .refs = 1,
         .value = .{
             .@"error" = @constCast(&object.Error{
@@ -839,7 +1031,7 @@ test "array evaluation" {
     },
         \\[1]["hello"];
     );
-    try expectObject(&Object{
+    try evaluator.expectObject(&Object{
         .refs = 1,
         .value = .{
             .@"error" = @constCast(&object.Error{
@@ -853,23 +1045,49 @@ test "array evaluation" {
     );
 }
 
+test "cyclic references" {
+    var evaluator = Evaluator.init(std.testing.allocator);
+    defer evaluator.deinit();
+
+    {
+        const result = try evaluator.evaluateTestCase(
+            \\let arr = [];
+            \\push(arr,arr);
+        );
+        result.dec(&evaluator.gc);
+    }
+
+    {
+        const result = try evaluator.evaluateTestCase(
+            \\let arr1 = [];
+            \\let arr2 = [];
+            \\push(arr1,arr2);
+            \\push(arr2,arr1);
+        );
+        result.dec(&evaluator.gc);
+    }
+}
+
 test "array builtin functions" {
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 3 } },
+    var evaluator = Evaluator.init(std.testing.allocator);
+    defer evaluator.deinit();
+
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .integer = 3 } },
         \\len([1, 2, 3]);
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 0 } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .integer = 0 } },
         \\len([]);
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 1 } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .integer = 1 } },
         \\first([1, 2, 3]);
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .string = "hello" } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .string = "hello" } },
         \\first(["hello"]);
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .null = {} } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .null = {} } },
         \\first([]);
     );
-    try expectObject(&Object{
+    try evaluator.expectObject(&Object{
         .refs = 1,
         .value = .{
             .@"error" = @constCast(&object.Error{
@@ -881,19 +1099,19 @@ test "array builtin functions" {
     },
         \\first(1);
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 2 } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .integer = 2 } },
         \\len(rest([1, 2, 3]));
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 2 } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .integer = 2 } },
         \\rest([1, 2, 3])[0];
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 0 } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .integer = 0 } },
         \\len(rest([1]));
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 0 } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .integer = 0 } },
         \\len(rest([]));
     );
-    try expectObject(&Object{
+    try evaluator.expectObject(&Object{
         .refs = 1,
         .value = .{
             .@"error" = @constCast(&object.Error{
@@ -905,22 +1123,22 @@ test "array builtin functions" {
     },
         \\rest(1);
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 2 } },
+    try evaluator.expectObject(&Object{ .refs = 2, .value = .{ .integer = 2 } },
         \\let a = [1];
         \\push(a, 2);
         \\a[1];
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 2 } },
+    try evaluator.expectObject(&Object{ .refs = 1, .value = .{ .integer = 2 } },
         \\let a = [1];
         \\push(a, 2);
         \\len(a);
     );
-    try expectObject(&Object{ .refs = 1, .value = .{ .integer = 1 } },
+    try evaluator.expectObject(&Object{ .refs = 2, .value = .{ .integer = 1 } },
         \\let a = [1];
         \\push(a, 2);
         \\a[0];
     );
-    try expectObject(&Object{
+    try evaluator.expectObject(&Object{
         .refs = 1,
         .value = .{
             .@"error" = @constCast(&object.Error{

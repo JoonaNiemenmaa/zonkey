@@ -10,189 +10,14 @@ const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const StaticStringMap = std.StaticStringMap;
+const DoublyLinkedList = std.DoublyLinkedList;
+
 const Token = monkey.token.Token;
+const Evaluator = monkey.evaluate.Evaluator;
 
-pub const TRUE = &Object{
-    .refs = 1,
-    .value = Value{ .boolean = true },
-};
-
-pub const FALSE = &Object{
-    .refs = 1,
-    .value = Value{ .boolean = false },
-};
-
-pub const NULL = &Object{
-    .refs = 1,
-    .value = Value{ .null = {} },
-};
-
-const LEN_ARGS = 1;
-
-fn len(args: []*Object, token: Token, env: *Environment) Allocator.Error!*Object {
-    if (args.len != LEN_ARGS) return createErrorObject(
-        token.line,
-        token.column,
-        "function call provided {} arguments instead of {}",
-        .{ args.len, LEN_ARGS },
-        env.allocator,
-    );
-
-    const obj = args[0];
-
-    return switch (obj.value) {
-        .string => |string| createIntegerObject(@intCast(string.len), env.allocator),
-        .array => |array| createIntegerObject(@intCast(array.items.len), env.allocator),
-        .@"error" => obj,
-        else => try createErrorObject(
-            token.line,
-            token.column,
-            "argument to 'len' not supported, got {s}",
-            .{@tagName(obj.value)},
-            env.allocator,
-        ),
-    };
-}
-
-const FIRST_ARGS = 1;
-
-fn first(args: []*Object, token: Token, env: *Environment) Allocator.Error!*Object {
-    if (args.len != FIRST_ARGS) return createErrorObject(
-        token.line,
-        token.column,
-        "function call provided {} arguments instead of {}",
-        .{ args.len, FIRST_ARGS },
-        env.allocator,
-    );
-
-    const obj = args[0];
-
-    switch (obj.value) {
-        .array => |array| {
-            if (array.items.len > 0) {
-                array.items[0].inc();
-                return array.items[0];
-            } else {
-                return @constCast(NULL);
-            }
-        },
-        .@"error" => return obj,
-        else => return try createErrorObject(
-            token.line,
-            token.column,
-            "argument to 'first' not supported, got {s}",
-            .{@tagName(obj.value)},
-            env.allocator,
-        ),
-    }
-}
-
-const REST_ARGS = 1;
-
-fn rest(args: []*Object, token: Token, env: *Environment) Allocator.Error!*Object {
-    if (args.len != REST_ARGS) return createErrorObject(
-        token.line,
-        token.column,
-        "function call provided {} arguments instead of {}",
-        .{ args.len, REST_ARGS },
-        env.allocator,
-    );
-
-    const obj = args[0];
-
-    switch (obj.value) {
-        .array => |array| {
-            if (array.items.len == 0) return try createArrayObject(
-                &[_]*Object{},
-                env.allocator,
-            );
-
-            const objects = try env.allocator.alloc(*Object, array.items.len - 1);
-            errdefer env.allocator.free(objects);
-
-            for (array.items[1..], 0..) |item, i| {
-                objects[i] = item;
-                item.inc();
-            }
-
-            return try createArrayObject(objects, env.allocator);
-        },
-        .@"error" => return obj,
-        else => return try createErrorObject(
-            token.line,
-            token.column,
-            "argument to 'rest' not supported, got {s}",
-            .{@tagName(obj.value)},
-            env.allocator,
-        ),
-    }
-}
-
-const PUSH_ARGS = 2;
-
-fn push(args: []*Object, token: Token, env: *Environment) Allocator.Error!*Object {
-    if (args.len != PUSH_ARGS) return createErrorObject(
-        token.line,
-        token.column,
-        "function call provided {} arguments instead of {}",
-        .{ args.len, PUSH_ARGS },
-        env.allocator,
-    );
-
-    const obj = args[0];
-
-    switch (obj.value) {
-        .array => |array| {
-            if (args[1].value == .@"error") return args[1];
-            try array.append(env.allocator, args[1]);
-            args[1].inc();
-            obj.inc();
-            return obj;
-        },
-        .@"error" => {
-            obj.inc();
-            return obj;
-        },
-        else => return try createErrorObject(
-            token.line,
-            token.column,
-            "argument to 'push' not supported, got {s}",
-            .{@tagName(obj.value)},
-            env.allocator,
-        ),
-    }
-}
-
-pub const builtins: StaticStringMap(*const Object) = .initComptime(.{
-    .{
-        "len",
-        &Object{
-            .refs = 1,
-            .value = .{ .builtin = &len },
-        },
-    },
-    .{
-        "first",
-        &Object{
-            .refs = 1,
-            .value = .{ .builtin = &first },
-        },
-    },
-    .{
-        "rest",
-        &Object{
-            .refs = 1,
-            .value = .{ .builtin = &rest },
-        },
-    },
-    .{
-        "push",
-        &Object{
-            .refs = 1,
-            .value = .{ .builtin = &push },
-        },
-    },
-});
+pub const TRUE = &Object{ .value = Value{ .boolean = true } };
+pub const FALSE = &Object{ .value = Value{ .boolean = false } };
+pub const NULL = &Object{ .value = Value{ .null = {} } };
 
 pub fn toBooleanObject(boolean: bool) *Object {
     return @constCast(if (boolean) TRUE else FALSE);
@@ -200,7 +25,7 @@ pub fn toBooleanObject(boolean: bool) *Object {
 
 pub fn createObject(allocator: Allocator) !*Object {
     const ptr = try allocator.create(Object);
-    ptr.refs = 1;
+    ptr.* = .{ .value = Value{ .null = {} } };
     return ptr;
 }
 
@@ -237,61 +62,68 @@ pub fn createErrorObject(
     return @"error";
 }
 
-pub fn createArrayObject(objects: []*Object, allocator: Allocator) !*Object {
-    var array = try allocator.create(ArrayList(*Object));
+pub fn createArrayObject(objects: []*Object, gc: *GarbageCollector) !*Object {
+    var array = try gc.allocator.create(ArrayList(*Object));
     array.* = .fromOwnedSlice(objects);
 
     errdefer {
-        array.deinit(allocator);
-        allocator.destroy(array);
+        array.deinit(gc.allocator);
+        gc.allocator.destroy(array);
     }
 
-    const object = try createObject(allocator);
-    errdefer object.destroy(allocator);
+    const object = try createObject(gc.allocator);
+    errdefer object.destroy(gc.allocator);
 
     object.value = Value{ .array = array };
+
+    gc.containers.append(&object.node);
 
     return object;
 }
 
 pub const Object = struct {
-    refs: usize,
     value: Value,
+
+    refs: usize = 1,
+    gcRefs: usize = 1,
+    reachable: bool = true,
+    node: DoublyLinkedList.Node = .{},
 
     pub fn inc(self: *@This()) void {
         self.refs += 1;
     }
 
-    pub fn dec(self: *@This(), allocator: Allocator) void {
+    pub fn dec(self: *@This(), gc: *GarbageCollector) void {
         if (self.refs > 0) self.refs -= 1;
         if (self.refs == 0) {
             switch (self.value) {
-                .array => |array| for (array.items) |item| item.dec(allocator),
+                .array => |array| for (array.items) |item| item.dec(gc),
                 else => {},
             }
-            self.destroy(allocator);
+            self.destroy(gc);
         }
     }
 
-    pub fn destroy(self: *@This(), allocator: Allocator) void {
+    pub fn destroy(self: *@This(), gc: *GarbageCollector) void {
         switch (self.value) {
             .null => return,
             .boolean => return,
             .builtin => return,
             .integer => {},
             .@"return" => {},
-            .string => |string| allocator.free(string),
+            .string => |string| gc.allocator.free(string),
             .@"error" => |@"error"| {
-                allocator.free(@"error".message);
-                allocator.destroy(@"error");
+                gc.allocator.free(@"error".message);
+                gc.allocator.destroy(@"error");
             },
-            .function => |function| allocator.destroy(function),
+            .function => |function| gc.allocator.destroy(function),
             .array => |array| {
-                array.deinit(allocator);
-                allocator.destroy(array);
+                gc.containers.remove(&self.node);
+                array.deinit(gc.allocator);
+                gc.allocator.destroy(array);
             },
         }
-        allocator.destroy(self);
+        gc.allocator.destroy(self);
     }
 
     pub fn print(self: @This(), writer: *Writer) !void {
@@ -339,7 +171,7 @@ pub const Value = union(enum) {
     @"return": *Object,
     @"error": *Error,
     function: *Function,
-    builtin: *const fn ([]*Object, Token, *Environment) Allocator.Error!*Object,
+    builtin: *const fn (*Evaluator, []*Object, Token) Allocator.Error!*Object,
     array: *ArrayList(*Object),
 };
 
@@ -368,10 +200,10 @@ pub const Environment = struct {
         };
     }
 
-    pub fn put(self: *@This(), key: []const u8, obj: *Object) !void {
+    pub fn put(self: *@This(), key: []const u8, obj: *Object, gc: *GarbageCollector) !void {
         if (self.bindings.get(key)) |value| {
             if (value != obj) {
-                value.dec(self.allocator);
+                value.dec(gc);
             }
         }
         try self.bindings.put(key, obj);
@@ -387,9 +219,91 @@ pub const Environment = struct {
         }
     }
 
-    pub fn deinit(self: *@This()) void {
+    pub fn deinit(self: *@This(), gc: *GarbageCollector) void {
         var i = self.bindings.valueIterator();
-        while (i.next()) |value| value.*.dec(self.allocator);
+        while (i.next()) |value| value.*.dec(gc);
         self.bindings.deinit();
+    }
+};
+
+pub const GarbageCollector = struct {
+    allocator: Allocator,
+    containers: DoublyLinkedList = .{},
+
+    pub fn init(allocator: Allocator) @This() {
+        return @This(){ .allocator = allocator };
+    }
+
+    fn isContainer(object: *Object) bool {
+        return object.value == .array or object.value == .function;
+    }
+
+    pub fn collect(self: *@This()) void {
+        // std.debug.print("-----------------------------\n", .{});
+        {
+            var i = self.containers.first;
+            while (i) |node| : (i = node.next) {
+                const container: *Object = @fieldParentPtr("node", node);
+                container.gcRefs = container.refs;
+                container.reachable = true;
+            }
+        }
+
+        {
+            var i = self.containers.first;
+            while (i) |node| : (i = node.next) {
+                const container: *Object = @fieldParentPtr("node", node);
+                switch (container.value) {
+                    .array => |array| for (array.items) |object| {
+                        if (isContainer(object)) object.gcRefs -= 1;
+                    },
+                    else => unreachable,
+                }
+            }
+        }
+
+        // {
+        //     var i = self.containers.first;
+        //     while (i) |node| : (i = node.next) {
+        //         const container: *Object = @fieldParentPtr("node", node);
+        //         std.debug.print("{}\n", .{container});
+        //     }
+        // }
+
+        var @"unreachable": DoublyLinkedList = .{};
+        {
+            var i = self.containers.first;
+            while (i) |node| {
+                const container: *Object = @fieldParentPtr("node", node);
+                i = node.next;
+                if (container.gcRefs > 0) {
+                    switch (container.value) {
+                        .array => |array| for (array.items) |object| {
+                            if (object.gcRefs == 0 and isContainer(object)) {
+                                object.gcRefs = 1;
+                                if (!object.reachable) {
+                                    @"unreachable".remove(&object.node);
+                                    self.containers.append(&object.node);
+                                }
+                            }
+                        },
+                        else => unreachable,
+                    }
+                } else {
+                    container.reachable = false;
+                    self.containers.remove(&container.node);
+                    @"unreachable".append(&container.node);
+                }
+            }
+        }
+
+        {
+            var i = @"unreachable".first;
+            while (i) |node| {
+                const object: *Object = @fieldParentPtr("node", node);
+                i = node.next;
+                object.destroy(self);
+            }
+        }
     }
 };
