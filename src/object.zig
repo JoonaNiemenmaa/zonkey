@@ -64,21 +64,34 @@ pub fn createErrorObject(
 
 pub fn createArrayObject(objects: []*Object, gc: *GarbageCollector) !*Object {
     var array = try gc.allocator.create(ArrayList(*Object));
-    array.* = .fromOwnedSlice(objects);
+    errdefer gc.allocator.destroy(array);
 
-    errdefer {
-        array.deinit(gc.allocator);
-        gc.allocator.destroy(array);
-    }
+    array.* = .fromOwnedSlice(objects);
+    errdefer array.deinit(gc.allocator);
 
     const object = try createObject(gc.allocator);
-    errdefer object.destroy(gc.allocator);
 
     object.value = Value{ .array = array };
 
     gc.containers.append(&object.node);
 
     return object;
+}
+
+pub fn createEnvObject(outer: ?*Environment, gc: *GarbageCollector) !*Environment {
+    const object = try createObject(gc.allocator);
+    errdefer gc.allocator.destroy(object);
+
+    const env = try gc.allocator.create(Environment);
+    errdefer gc.allocator.destroy(env);
+
+    env.* = .init(gc.allocator, outer, object);
+
+    object.* = .{ .value = .{ .env = env } };
+
+    gc.containers.append(&object.node);
+
+    return env;
 }
 
 pub const Object = struct {
@@ -97,33 +110,35 @@ pub const Object = struct {
         if (self.refs > 0) self.refs -= 1;
         if (self.refs == 0) {
             switch (self.value) {
-                .array => |array| for (array.items) |item| item.dec(gc),
-                else => {},
+                .null => return,
+                .boolean => return,
+                .builtin => return,
+                .integer => {},
+                .@"return" => {},
+                .string => |string| gc.allocator.free(string),
+                .@"error" => |@"error"| {
+                    gc.allocator.free(@"error".message);
+                    gc.allocator.destroy(@"error");
+                },
+                .function => |function| {
+                    gc.containers.remove(&self.node);
+                    function.env.object.dec(gc);
+                    gc.allocator.destroy(function);
+                },
+                .array => |array| {
+                    gc.containers.remove(&self.node);
+                    for (array.items) |item| item.dec(gc);
+                    array.deinit(gc.allocator);
+                    gc.allocator.destroy(array);
+                },
+                .env => |env| {
+                    gc.containers.remove(&self.node);
+                    env.deinit(gc);
+                    gc.allocator.destroy(env);
+                },
             }
-            self.destroy(gc);
+            gc.allocator.destroy(self);
         }
-    }
-
-    pub fn destroy(self: *@This(), gc: *GarbageCollector) void {
-        switch (self.value) {
-            .null => return,
-            .boolean => return,
-            .builtin => return,
-            .integer => {},
-            .@"return" => {},
-            .string => |string| gc.allocator.free(string),
-            .@"error" => |@"error"| {
-                gc.allocator.free(@"error".message);
-                gc.allocator.destroy(@"error");
-            },
-            .function => |function| gc.allocator.destroy(function),
-            .array => |array| {
-                gc.containers.remove(&self.node);
-                array.deinit(gc.allocator);
-                gc.allocator.destroy(array);
-            },
-        }
-        gc.allocator.destroy(self);
     }
 
     pub fn print(self: @This(), writer: *Writer) !void {
@@ -148,6 +163,7 @@ pub const Object = struct {
                 try function.body.print(writer);
             },
             .builtin => |builtin| try writer.print("BUILTIN: {}\n", .{builtin}),
+            .env => |env| try writer.print("ENV: {}\n", .{env}),
             .array => |array| {
                 try writer.print("[", .{});
                 for (array.items, 1..) |item, i| {
@@ -173,6 +189,7 @@ pub const Value = union(enum) {
     function: *Function,
     builtin: *const fn (*Evaluator, []*Object, Token) Allocator.Error!*Object,
     array: *ArrayList(*Object),
+    env: *Environment,
 };
 
 pub const Error = struct {
@@ -191,12 +208,14 @@ pub const Environment = struct {
     bindings: StringHashMap(*Object),
     allocator: Allocator,
     outer: ?*Environment,
+    object: *Object,
 
-    pub fn init(allocator: Allocator, outer: ?*Environment) @This() {
+    pub fn init(allocator: Allocator, outer: ?*Environment, object: *Object) @This() {
         return @This(){
             .bindings = .init(allocator),
             .outer = outer,
             .allocator = allocator,
+            .object = object,
         };
     }
 
@@ -235,11 +254,11 @@ pub const GarbageCollector = struct {
     }
 
     fn isContainer(object: *Object) bool {
-        return object.value == .array or object.value == .function;
+        return object.value == .array or object.value == .function or object.value == .env;
     }
 
     pub fn collect(self: *@This()) void {
-        // std.debug.print("-----------------------------\n", .{});
+        //std.debug.print("-----------------------------\n", .{});
         {
             var i = self.containers.first;
             while (i) |node| : (i = node.next) {
@@ -256,6 +275,16 @@ pub const GarbageCollector = struct {
                 switch (container.value) {
                     .array => |array| for (array.items) |object| {
                         if (isContainer(object)) object.gcRefs -= 1;
+                    },
+                    .function => |function| {
+                        function.env.object.gcRefs -= 1;
+                    },
+                    .env => |env| {
+                        var bindingIterator = env.bindings.valueIterator();
+                        while (bindingIterator.next()) |ptr| {
+                            const value = ptr.*;
+                            if (value.value == .function) value.gcRefs -= 1;
+                        }
                     },
                     else => unreachable,
                 }
@@ -287,6 +316,29 @@ pub const GarbageCollector = struct {
                                 }
                             }
                         },
+                        .function => |function| {
+                            const object = function.env.object;
+                            if (object.gcRefs == 0) {
+                                object.gcRefs = 1;
+                                if (!object.reachable) {
+                                    @"unreachable".remove(&object.node);
+                                    self.containers.append(&object.node);
+                                }
+                            }
+                        },
+                        .env => |env| {
+                            var bindingIterator = env.bindings.valueIterator();
+                            while (bindingIterator.next()) |ptr| {
+                                const value = ptr.*;
+                                if (value.gcRefs == 0 and value.value == .function) {
+                                    value.gcRefs = 1;
+                                    if (!value.reachable) {
+                                        @"unreachable".remove(&value.node);
+                                        self.containers.append(&value.node);
+                                    }
+                                }
+                            }
+                        },
                         else => unreachable,
                     }
                 } else {
@@ -302,7 +354,25 @@ pub const GarbageCollector = struct {
             while (i) |node| {
                 const object: *Object = @fieldParentPtr("node", node);
                 i = node.next;
-                object.destroy(self);
+
+                switch (object.value) {
+                    .array => |array| {
+                        for (array.items) |item| if (!isContainer(item)) item.dec(self);
+                        array.deinit(self.allocator);
+                        self.allocator.destroy(array);
+                    },
+                    .function => |function| {
+                        self.allocator.destroy(function);
+                    },
+                    .env => |env| {
+                        var envIterator = env.bindings.valueIterator();
+                        while (envIterator.next()) |ptr| if (ptr.*.value != .function) ptr.*.dec(self);
+                        env.bindings.deinit();
+                        self.allocator.destroy(env);
+                    },
+                    else => unreachable,
+                }
+                self.allocator.destroy(object);
             }
         }
     }
