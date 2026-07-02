@@ -70,7 +70,7 @@ pub fn evaluateFile(io: Io, filename: []const u8) !void {
         const result = try evaluator.evaluateProgram(program);
         try result.print(stdout);
         try stdout.print("\n", .{});
-        result.dec(evaluator.gc);
+        result.dec(&evaluator.gc);
     } else {
         try stdout.print("{s}\n", .{MONKEY_FACE});
         try stdout.print("Woops! We ran into some monkey business here!\n", .{});
@@ -136,7 +136,7 @@ pub fn startRepl() !void {
 
         if (errors.len == 0) {
             const result = try evaluator.evaluateProgram(program);
-            defer result.dec(evaluator.gc);
+            defer result.dec(&evaluator.gc);
 
             try result.print(stdout);
             try stdout.print("\n", .{});
